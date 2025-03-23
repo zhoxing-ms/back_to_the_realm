@@ -1,0 +1,378 @@
+环境介绍
+用户可以在<算法名称>/train_workflow.py的workflow函数的参数中获取重返秘境环境env:
+
+def workflow(envs, agents, logger=None, monitor=None):
+    # 从环境列表中获得环境, get env from envs(env-list)
+    env = envs[0] 
+
+环境env有两个接口: reset 和 step，用户可以简单地通过以下方式来调用重返秘境环境：
+
+obs = env.reset(usr_conf=usr_conf)
+frame_no, _obs, score, terminated, truncated, env_info = env.step(act)
+
+其中 reset是重启环境，step是推进环境进行下一步，step返回的frame_no是任务帧数，terminated表示游戏结束，即走到终点，truncated表示任务中断（超时或异常）。其他变量将在下文进行详细介绍。
+
+
+环境配置
+用户可以在reset时传入一个usr_conf来实现定制化的环境配置。
+
+usr_conf是一个字典类型，需要先定义一个 key 叫做 diy，diy的值包含一些键值对:
+
+数据名	数据类型	数据描述
+start	int	起点编号，范围是[1,15]，起点和终点不能重复
+end	int	终点编号, 范围是[1,15]，起点和终点不能重复
+treasure_random	int	是否生成随机宝箱，设置为1表示随机宝箱，设置为0表示固定宝箱，其他值非法
+treasure_num	int	生成随机宝箱时的宝箱数量，仅在treasure_random=1时生效，范围是 [1, 13]
+treasure_id	list	生成固定宝箱时的宝箱编号，仅在treasure_random=0时生效，范围是 [1, 15]，需要排除起点和终点编号，如果需要固定生成0个宝箱则传入[ ]
+max_step	int	单局最大步数，默认值为2000，无特殊需求不建议设置，过大的值会导致训练缓慢
+talent_type	int	智能体技能，默认值为1，其他值非法
+💡 补充说明：
+
+usr_conf仅在训练时生效。
+请按上表所述进行usr_conf的配置。若配置错误，env.reset会在调用超时后返回None，无法获取游戏状态，训练不会正常进行，您可以通过监控界面查看环境相关的错误信息。
+有效的位置编号范围为[1, 15]，因0号位置固定为加速增益的生成位置，1-15号位置可以配置起点/终点/宝箱。随机生成宝箱也是从有效位置编号中随机不重复的抽取。
+如果用户不在代码中显式设置usr_conf，则usr_conf将采用默认配置：
+start: 0
+end: 1
+treasure_id: []
+treasure_num: 5
+treasure_random: 1
+
+模型评估时，用户需要通过开悟平台创建评估任务并完成任务的环境配置，其中起点、终点位置固定为2和1，用户可以设置宝箱是否随机以及宝箱的数量。若设置为固定宝箱，则宝箱位置id从3开始按顺序生成，例如配置固定宝箱个数为5，则宝箱位置id为[3, 4, 5, 6, 7]。
+每个位置id对应的位置如下图所示：
+
+
+以下提供几个usr_conf的设置实例：
+
+例子#1
+
+# 起点为2，终点为1，固定6个宝箱[4, 5, 6, 7, 8, 9]
+usr_conf = {
+  "diy": {
+      "start": 2,
+      "end": 1,
+      "treasure_id": [4, 5, 6, 7, 8, 9],
+      "treasure_random": 0,
+      "talent_type": 1,
+      "max_step": 2000,
+  }
+}
+
+例子#2
+
+# 起点为2，终点为1，随机8个宝箱
+usr_conf = {
+  "diy": {
+      "start": 2,
+      "end": 1,
+      "treasure_random": 1,
+      "talent_type": 1,
+      "treasure_num": 8,
+      "max_step": 2000,
+  }
+}
+
+
+例子#3
+
+# 起点为2，终点为1，固定0个宝箱
+usr_conf = {
+  "diy": {
+      "start": 2,
+      "end": 1,
+      "treasure_id": [],
+      "treasure_random": 0,
+      "talent_type": 1,
+      "max_step": 2000,
+  }
+}
+
+
+环境信息
+用户调用env.step可以返回环境下一时刻的所有状态，以下是这些数据的描述，具体可以参考数据协议。：
+
+数据名	数据类型	数据描述
+frame_no	int32	当前帧数
+obs	<class 'custom_pb2.Observation'>	环境状态信息(观测信息)
+score	<class 'custom_pb2.ScoreInfo'>	得分信息
+terminated	int32	表示游戏结束，即走到终点
+truncated	int32	表示任务中断（超时或异常）
+env_info	<class 'custom_pb2.EnvInfo'>	其他环境信息
+用户调用env.reset可以返回环境的第一帧的状态，但仅包含观测空间obs。
+
+观测空间
+环境返回的观测信息包含了当前环境的状态信息，具体包含属性feature和legal_act，以下是这些数据的描述：
+
+数据名	数据类型	数据描述
+norm_pos	FloatPosition	归一化后的绝对坐标
+grid_pos	Position	网格坐标
+start_pos	RelativePosition	起点的相对位置
+end_pos	RelativePosition	终点的相对位置
+buff_pos	list(RelativePosition)	加速增益的相对位置
+treasure_pos	RelativePosition	宝箱的相对位置
+obstacle_map	list	周边障碍物信息
+memory_map	list	周边记忆地图信息
+treasure_map	list	周边宝箱信息
+end_map	list	周边终点信息
+legal_act	list	环境当前状态的可执行的动作
+位置信息
+以norm_pos和grid_pos为例，分别表示归一化后的绝对坐标和网格坐标，分别为FloatPosition类型和Position类型，norm_pos由grid_pos计算得到
+
+# FloatPosition的协议描述
+message FloatPosition {
+  float x = 1;                // x坐标
+  float z = 2;                // z坐标
+}
+# Position的协议描述
+message Position {
+  int32 x = 1;                // x坐标
+  int32 z = 2;                // z坐标
+}
+# 示例代码
+pos = Position(x=100, z=100)
+float_pos = FloatPosition(
+        x=pos.x/64000,
+        z=pos.z/64000,
+)
+
+相对位置信息
+下面是对RelativePosition详细的描述：
+
+RelativePosition表征的是英雄在任意位置时，物件的相对位置信息，比如方向，距离。其中：
+
+RelativeDirection通过枚举离散化表示方向信息。RELATIVE_DIRECTION_NONE East NorthEast North NorthWest West SouthWest South SouthEast
+RelativeDistance通过枚举离散化表示距离信息。RELATIVE_DISTANCE_NONE VerySmall Small Medium Large VeryLarge
+path_distance和grid_distance是通过将地图网格化后计算出的从英雄当前格子到目标格子的网格路径最短距离，前者进行了离散化处理，后者进行了归一化处理。
+RelativePosition	数据类型	数据描述
+direction	RelativeDirection	相对方位（离散化）
+l2_distance	RelativeDistance	L2距离（离散化）
+path_distance	RelativeDistance	网格化后的最短路径距离（离散化）
+grid_distance	float	网格化后的最短路径距离（归一化）
+💡 特别说明：
+
+在计算两点的grid_distance时，如果有一点的位置在障碍物里（无法走到的点位），grid_distance统一设置为1。因此，在解包时如果发现智能体距离宝箱或加速增益的grid_distance为1，说明宝箱和buff不存在或已被收集。
+grid_distance的计算是对同学们隐藏了的，以观测的方式直接从环境中返回，grid_distance表征的是智能体当前位置与某个物件的最短路径距离，该路径距离指的是网格路径。具体做法是先得到智能体和物件的网格坐标，然后通过bfs搜索算法按照L1距离的方式来计算出两个网格相距的最短路径。比如[1, 4]和[5, 10]的最短网格距离为| 1 - 5 | + | 4 - 10 | = 4 + 6 = 10。最后将该距离除以256来归一化，即10 / 256 = 0.039。
+由于grid_distance在做归一化计算时是将所有距离除以256，因此在进行逆归一化时要乘以256从而得到原始的整形的grid_distance。
+观测视野范围
+智能体观测到的地图范围是有限的，我们在观测空间中提供了智能体的视野域信息，即英雄周围的网格化后的局部信息。如下图所示：
+
+
+视野域中会标注出障碍物、宝箱、终点以及记忆信息，分别存储在obstacle_map、treasure_map、end_map、memory_map四个向量中。
+
+向量名	说明
+obstacle_map	向量长度为2601，是51x51的矩阵视野域的一维展开，有阻挡的位置为0，无阻挡的位置为1。
+memory_map	记录智能体探索每一个网格区域的次数，归一化到[0，1]，初始化为0，每抵达一个网格，该网格坐标对应的值+0.2，最大为1。
+treasure_map	标注宝箱的位置，有宝箱的位置为1，否则为0。
+end_map	标注终点的位置，有终点的位置为1，否则为0。
+💡 补充说明：
+
+上图中的“圆形”代表的是物件（终点、宝箱、加速增益）的触发范围。（圆形通常在每条道路的尽头，请仔细观察地图。）
+局部地图信息维度较大，更适合先用CNN进行图片的特征提取。
+上图中的网格就是特征工程里对地图的网格化处理，网格的宽度为500，将64000x64000的地图划分成了128x128的网格，基于网格生成了很多特征（比如grid_distance，4个map特征）。有关特征工程的详细代码说明请查看代码包介绍-实现特征处理和样本处理。
+合法动作
+环境的当前状态状态包括当前的合法动作（即当前状态下哪些动作可以被执行），如智能体的技能还在冷却中，则该技能的legal_act会被标记为0，具体详见动作空间-合法动作。
+
+
+动作空间
+重返秘境的动作空间分为两个部分：移动和技能，总的Action维度为16。env.step()传入的参数取值范围是[0, 15]
+
+移动
+移动使用的是8维离散化的动作空间，如下图所示，将360度等分为8份，每45度角一个动作方向，以x轴正方向为起点，逆时针旋转。
+
+
+对应关系如下：
+
+// 方向角，以x轴正方向为起始边
+enum Direction {
+    Angle_0 = 0;
+    Angle_45 = 1;
+    Angle_90 = 2;
+    Angle_135 = 3;
+    Angle_180 = 4;
+    Angle_225 = 5;
+    Angle_270 = 6;
+    Angle_315 = 7;
+}
+
+我们将移动用一个8维的one-hot vector来表征，比如Direction = Angle_90时，Action[0 : 8] = [0, 0, 1, 0, 0, 0, 0, 0]
+
+技能
+智能体有 超级闪现 技能，技能默认CD为120秒，闪现距离为8000，超级闪现的方向和移动方向一致。技能同样也是用一个8维的one-hot vector来表征，比如使用超级闪现且超级闪现方向Direction = Angle_270时，Action[8 : 16] = [0, 0, 0, 0, 0, 0, 1, 0]。
+
+执行逻辑
+接下来介绍智能体移动和技能的执行逻辑。在一次决策中，首先必须给智能体提供一个方向（8维的Direction），然后：
+
+如果智能体执行移动动作，那么智能体会沿着该方向移动，一次预测（3帧）的移动距离大概为700，加速状态为1000。
+
+移动方向上无障碍物：正常移动。
+移动方向上有障碍物：如下图白色箭头，移动方向的命令为Angle_45=1, 实际执行时由于障碍物的阻挡，会沿着下方的白色箭头贴着障碍物的边缘移动。
+如果智能体执行超级闪现动作，那么智能体会沿着该方向闪现，闪现距离为8000。
+
+闪现方向上无障碍物：正常闪现，如下图的红色例子。
+闪现方向上有障碍物：
+闪现的目标位置无障碍物：穿墙闪现，如下图的蓝色箭头。
+闪现的目标位置有障碍物：闪现失败，原地不动，如下图的黄色箭头，英雄还是处于方块位置不动
+
+💡 补充说明：
+
+正方形图标代表智能体所在位置，圆形图标代表目标位置，箭头方向代表动作方向
+地图中的网格是辅助线网格
+合法动作
+在环境中的某一时刻，不是所有的动作都可以被执行，因此我们需要向模型输入legal action，将网络结果进行掩码（masking）从而避免不符合规则的动作被输出。
+
+在重返秘境中，超级闪现作为一个可执行的动作在冷却未结束时需要被避免使用，因此，在我们默认设置里将超级闪现是否可使用的信息作为legal action输入。
+
+在默认设置里，legal_action的输入为二维，第一维代表移动方向，第二维代表超级闪现方向。在超级闪现可以使用的时候移动和超级闪现都被允许预测，因此我们返还 [1, 1]， 在超级闪现冷却时超级闪现不被允许输出，因此我们返还[1, 0]。在DQN算法的网络中输出16维的Q值信息，前八维对应八个可行走方向，后八维对应八个可超级闪现方向，第一维legal_action对应前八维输出，第二维legal_action对应后八维输出。
+
+
+其他环境信息
+其他环境信息包括：积分信息，环境是否结束信息，环境是否异常结束，环境当前状态信息，分别在score、terminated、truncated、env_info中体现。其中env_info 中包含了丰富的环境状态信息，用户可以使用这些信息进行特征工程等工作，具体可以参考数据协议。
+
+环境信息的某些细节代码对同学们进行了隐藏，下面是通过文档的方式对其中调用的几个重要函数进行简单的介绍。其中比较重要的是convert_pos_to_grid_pos函数，这个函数是将原始数据中的坐标转换为128x128的栅格化后坐标。
+
+norm(pos):
+
+Introduction: 坐标归一化
+
+Parameters
+
+pos: 坐标位置
+Realization
+
+float_pos = FloatPosition(
+        x=pos.x/64000,
+        z=pos.z/64000,
+    )
+
+polar_norm(pos):
+
+Introduction: 转换极坐标并归一化
+
+Parameters
+
+pos: 坐标位置
+Realization
+
+r = math.hypot(pos.x, pos.z) / (64000*math.sqrt(2))
+  theta = math.atan2(pos.z, pos.x)
+  if theta < 0:
+      theta = 2 * math.pi + theta
+  theta = theta / (math.pi * 2)
+
+  float_pos = FloatPosition(
+      x=r,
+      z=theta
+  )
+
+ln_distance(a1, b1, a2, b2, n):
+
+Introduction: 计算 l_n距离
+Parameters
+a1: 当前位置x坐标
+b1: 当前位置z坐标
+a2: 目标位置x坐标
+b2: 目标位置z坐标
+n: 指数值
+get_relative_pos():
+
+Introduction: 获得 organ（宝箱和buff）相对当前位置的方向和距离信息
+
+Realization
+
+x, z = convert_pos_to_grid_pos(pos.x, pos.z)
+info = REL_POS[str(id)][str((x, z))]
+rel_pos = RelativePosition()
+rel_pos.direction = info["direction"]
+rel_pos.l2_distance = info["l2_distance"]
+rel_pos.path_distance = info["path_distance"]
+rel_pos.grid_distance = info["grid_distance"]
+
+get_null_relative_pos():
+
+Introduction: 返还空的 RelativePosition, 当宝箱不存在或被获取后调用
+
+Realization
+
+rel_pos = RelativePosition()
+rel_pos.direction = RelativeDirection.RELATIVE_DIRECTION_NONE
+rel_pos.l2_distance = RelativeDistance.VeryLarge
+rel_pos.path_distance = RelativeDistance.VeryLarge
+rel_pos.grid_distance = 1
+
+convert_pos_to_grid_pos(x, z):
+
+Introduction: 将pos转换为珊格化后坐标，网格的左下角顶点为原点，对应的game core坐标为(-2250, -5250)
+
+Parameters
+
+x: 当前位置x坐标
+z: 当前位置z坐标
+Realization
+
+x = (x + 2250) // 500
+z = (z + 5250) // 500
+
+get_feature(pos, memory_map, map_data, organs):
+
+Introduction: 整理所有的特征信息
+
+Parameters
+
+pos: 当前位置
+memory_map: 上一次行动的memory_map
+map_data: 本次任务栅格化地图信息
+organs: list of organs
+Realization
+
+# 对宝箱和buff进行相对位置和距离的计算
+for organ in organs:
+    if organ.sub_type == 2:
+        # Buff
+        if organ.status == 1:
+            # 可取
+            buff_pos = get_relative_pos(pos, organ.config_id)
+        else:
+            # 不可取
+            buff_pos = get_null_relative_pos()
+    elif organ.sub_type == 1:
+        # treasure
+        if organ.status == 1:
+            # 可取
+            treasure_poss[organ.config_id -
+                          1] = get_relative_pos(pos, organ.config_id)
+            treasure_grids.add(convert_pos_to_grid_pos(*POS_POOL[f'map_{GW2_CONFIG.map_id}'][str(organ.config_id)]))          
+    grid_pos_x, grid_pos_z = convert_pos_to_grid_pos(pos.x, pos.z)
+
+# Memory map 需要在local_memory_map初始化后更新  
+memory_map[grid_pos_x, grid_pos_z] = min(1, 0.2 + memory_map[grid_pos_x, grid_pos_z])
+
+
+
+得分信息
+env.step(act) 返回的 score 是在当前状态下执行动作 act 智能体所获得的分数，分数的计算详见计分规则。
+
+注意：得分是用于衡量模型在环境中的表现，也作为衡量强化学习训练后的模型的优劣，与强化学习里的奖励要区别开。
+
+时间信息
+帧（frame）和步（step）存在一定映射关系。
+
+帧是场景的一个时间单位，表示场景的一个完整更新周期。在每一帧中，场景的所有元素（如宝箱等）都会根据当前的状态和输入进行更新。
+
+步是强化学习环境中的一个时间单位，表示智能体（agent）在环境中执行一个动作并接收反馈的过程。在每一步中，智能体选择一个动作，环境根据该动作更新状态，并返回新的状态、奖励和终止信号。
+
+在本环境中，1个step由3个frame组成。这意味着每个动作对应一个步，在每一步中，智能体将在三个连续的帧中执行同一个动作。环境将在每一步结束后更新状态并返回反馈，场景只有在完成三帧后，环境状态才会返回一次状态的更新。
+
+步更新：在每一步中，智能体选择一个动作，环境更新状态并返回。
+帧更新：在一步中，场景进行三次帧更新，更新所有场景中对象的状态并渲染新的画面。
+帧（frame），步（step），现实时间秒（s）和现实时间毫秒（ms）的关系如下：
+
+1 frame 约等于 66 ms
+
+1 step 等于 3 frame
+
+1 s 等于 1000 ms
+
+注意 ：由于运行环境的差异，每一帧的时间会在66毫秒上下浮动
+
+注意 ：由于运行环境的差异，每一帧的时间会在66毫秒上下浮动
+

@@ -1,0 +1,566 @@
+代码包介绍
+目录介绍
+目录名	介绍
+dqn	dqn 算法子目录
+target_dqn	target_dqn 算法子目录
+diy	Do it yourself 用户自定义算法的子目录
+conf	配置文件
+train_test.py	代码正确性测试脚本
+其中 dqn，target_dqn 是重返秘境场景的 2 个核心算法，diy为用户自定义的算法。各个算法的子目录结构如下：
+
+目录/文件名	介绍
+algorithm/	算法相关，主要是 agent 的实现，包含训练和预测，详情见算法开发
+feature/	特征相关，主要包含用户自定义的数据结构和数据处理方法，以及特征和奖励的计算，详情见实现特征处理和样本处理
+model/	模型相关，主要是模型的实现，是一个Model类
+config.py	该算法下的配置，用户可以任意增加配置或修改配置，注意：SAMPLE_DIM是开悟框架使用配置，不允许删除
+train_workflow.py	强化学习的训练流程，详情见强化学习训练流程开发
+
+开发流程
+概括来说，我们的开发任务是：开发智能体和智能体的训练流程，这个智能体包含一个可被训练的模型，智能体可以对环境给出的观测进行决策，这个决策作用于环境产生新的观测，此过程通过训练流程控制，不断循环。训练流程还要收集循环过程中产生的每一帧数据，将他们组合成样本数据，智能体可以根据这些样本作为算法的输入，通过算法更新模型。由于重返秘境采用分布式训练，会启动多个容器，样本需要通过网络通信发送到训练容器（learner）中进行训练，所以需要对样本进行编码方便网络发送，另外智能体需要将learner容器上的模型同步回来。以上任务可以描述为下图：
+
+开发任务描述
+开发流程如下：
+
+定义数据结构：一般情况下，环境产生的原始观测数据不能直接作为智能体的输入，并且不同的用户开发的智能体一般是不一样的，显然不同的智能体的决策、学习方法的输入输出也是不一样的，所以开发的第一步，我们应该定义智能体输入输出的数据结构。包括特征（ObsData）、动作（ActData）、样本（SampleData），其中ObsData和ActData分别作为智能体predict方法的输入和输出，SampleData作为智能体learn方法的输入。
+实现特征处理和样本处理：不同的用户实现不同的智能体可能会定义不同的数据结构，但是，环境接口输入输出的数据结构是固定的，因此环境接口的输入输出数据和智能体接口的输入输出数据需要进行转换，所以还需要用户实现这些数据结构的转换方法，包括：observation_process, action_process, sample_process。
+算法开发：用户需要实现一个 agent，agent中实现一个模型（一般是神经网络模型）。agent负责与环境交互，产生预测动作并训练模型。
+实现强化学习训练流程：在实现了 数据结构，数据处理函数，模型和 智能体 以及其他方法（如奖励处理函数）后，我们还需要实现一个强化学习的训练流程workflow，将所有组件组合起来完成强化学习训练，即智能体通过不断的与环境交互，获取样本数据，更新并迭代模型，直到模型收敛到我们想要的效果。
+训练参数配置：在分布式训练时，开悟平台会启动一个样本池，一个模型同步服务，这些组件的相关参数用户可以根据自己的设计进行配置
+开发流程
+分布式训练架构如下图所示，
+
+diy需要框架训练
+特别注意： 因为重返秘境会进行分布式训练，开悟平台会启动一个样本池（样本先进先出），用户的agent.learn(samples)调用将会把样本发送到样本池，训练容器会从样本池中采样样本samples将其传入agent.learn(samples)进行训练，此过程是自动的，用户无需开发额外代码.
+
+由于sample的类型是用户定义的 SampleData，该类型无法直接进行网络传输，需要统一编码成 Numpy.array类型的数据。所以需要用户编写 SampleData2NumpyData函数实现 SampleData类型数据到 Numpy.array类型的转换，同时还要编写 NumpyData2SampleData函数实现 Numpy.array类型数据到 SampleData类型的转换，两个函数作为相对应的编码和解码函数，每一位数据都需要对齐，否则将产生数据错误，无法有效训练。
+
+以下为实现 SampleData2NumpyData和 NumpyData2SampleData的示例代码。
+
+# 编码解码函数的每一位都需要对齐，否则将产生数据错误
+@attached
+def SampleData2NumpyData(g_data):
+    return np.hstack(
+        (
+            np.array(g_data.obs, dtype=np.float32),
+            np.array(g_data._obs, dtype=np.float32),
+            np.array(g_data.obs_legal, dtype=np.float32),
+            np.array(g_data._obs_legal, dtype=np.float32),
+            np.array(g_data.act, dtype=np.float32),
+            np.array(g_data.rew, dtype=np.float32),
+            np.array(g_data.ret, dtype=np.float32),
+            np.array(g_data.done, dtype=np.float32),
+        )
+    )
+
+@attached
+def NumpyData2SampleData(s_data):
+    return SampleData(
+        obs=s_data[:10808],  # 维度参考config.py 中的 DESC_OBS_SPLIT配置
+        _obs=s_data[10808:21616],
+        obs_legal=s_data[-8:-6],
+        _obs_legal=s_data[-6:-4],
+        act=s_data[-4],
+        rew=s_data[-3],
+        ret=s_data[-2],
+        done=s_data[-1],
+    )
+
+另外，由于模型在训练容器（learner）进行训练，用户需要按需在恰当时机从训练容器加载模型。开悟平台会在某个容器中启动一个模型同步服务，用户在workflow中调用agent.load_model(id="latest")将会加载最新模型，若希望加载中间模型则可以指定id，若希望加载随机模型则调用agent.load_model(id="random")。
+
+最后，是用户可以配置的参数。根据SampleData转换成的Numpy.array的数据长度设置diy/config.py中配置项SAMPLE_DIM的值
+
+class Config:
+    # **注意**，此项必须正确配置，应该与definition.py中的NumpyData2SampleData函数数据对齐，否则可能报样本维度错误
+    SAMPLE_DIM = 21624
+
+
+样本池和模型同步服务的参数
+
+# 样本池容量大小
+replay_buffer_capacity = 4096
+# 该配置值确定了样本池中有多少样本后开始训练，如preload_ratio=1表示样本池满后开始训练，preload_ratio=2表示样本池中样本达到一半时开始训练
+preload_ratio = 1
+# 每次训练从样本池中采样的样本数量
+train_batch_size = 256
+# 每次训练的训练间隔，可以通过这个数值控制样本生成消耗比
+learner_train_sleep_seconds = 0.0001
+# 模型池大小，如果是采用最新的模型则设置为1; 需要采用历史模型则该值设置为需要的比如50, 模型池也是FIFO模式, 训练产生新模型淘汰旧模型
+modelpool_max_save_model_count = 1
+
+
+
+定义数据结构
+环境介绍里详细描述了环境返回的原始观测信息 obs，这里的 obs 已经做了一定的数据预处理工作，但是智能体是由用户设计和实现的，环境使用的obs, act等与智能体的输入输出是存在差异的，所以要先定义数据结构（类）再进行数据转换，包括：包括特征（ObsData）、动作（ActData）、样本（SampleData），这部分的代码，都需要实现在<算法名称>/feature/definition.py中。
+
+我们以 DQN 算法为例，介绍解决环境配置为固定宝箱时的数据类型定义。
+
+首先需要定义相关的数据结构（类）包含观测数据ObsData，动作数据ActData，和样本数据SampleData, 其中ObsData和ActData分别表示智能体预测的输入和输出，将会由agent.predict使用；SampleData为样本的数据类型，样本数据将会被agent.learn中的代码进行处理用于模型的训练。这些数据结构（类）包含哪些属性完全由用户自定义，属性名称属性数量没有限制。
+
+create_cls函数用于动态创建一个类，create_cls的第一个参数为类型名称，剩余参数为类的属性，属性默认值为None。以下是代码示例：
+
+# The create_cls function is used to dynamically create a class. The first parameter of the function is the type name,
+# and the remaining parameters are the attributes of the class, which should have a default value of None.
+# create_cls函数用于动态创建一个类，函数第一个参数为类型名称，剩余参数为类的属性，属性默认值应设为None
+ObsData = create_cls("ObsData",
+    feature=None,
+    legal_act=None)
+
+ActData = create_cls("ActData",
+    move_dir=None,
+    use_talent=None)
+
+SampleData = create_cls("SampleData",
+    obs=None,
+    _obs=None,
+    obs_legal=None,
+    _obs_legal=None,
+    act=None,
+    rew=None,
+    ret=None,
+    done=None)
+
+
+
+注意：必须使用create_cls这个函数创建这些类，若使用普通的类定义方法（class 类名）将无法在开悟平台正确运行。
+
+
+实现特征处理和样本处理
+用户需要实现特征处理，动作处理，样本处理，和奖励设计函数，例如环境返回的数据属于原始观测数据，是无法直接作为智能体预测时的输入的，我们需要实现特征处理函数(observation_process)，将环境返回的原始观测数据转换成用户定义的ObsData。这部分的代码，都需要实现在<算法名称>/feature/definition.py中。
+
+我们依然以 DQN算法为例，介绍解决环境配置为固定宝箱时的特征处理和样本处理。
+
+需要实现特征处理和样本处理的函数有：observation_process, action_process, sample_process。
+
+注意：这三个函数都必须使用@attached装饰器，代码默认已实现，注意不要删除。@attached装饰器会将用户实现的函数注册到开悟框架，若未使用装饰器，训练无法正常进行。
+
+函数名	输入	输出	描述
+observation_process	env.reset和env.step返回的原始观测数据raw_obs	用户定义的ObsData类型的数据	将环境返回的原始观测数据转换成用户定义的ObsData类型数据
+action_process	用户定义的ActData类型的数据	env.step能处理的动作数据	将智能体预测返回的ActData类的数据转换成env.step能处理的动作数据
+sample_process	在环境中收集的每一帧信息组成的列表	SampleData类型的数据组成的列表	将环境数据帧的集合转换为样本的集合
+我们为同学们提供了这部分的示例实现，在<算法名称>/feature/definition.py里，该函数中使用了3个工具函数one_hot_encoding, read_relative_position, bump，这部分代码实现在kaiwu_agent.back_to_the_realm.<算法名称>.feature_process/feature_process.py中。observation_process中实现了相对简单的特征工程，可以直接参考源码阅读。代码包里只计算了部分特征，还有一些特征是没有计算的，留给同学们自己设计和实现。
+
+注意：这三个函数都实现必须包含一个装饰器@attached，否则无法在开悟平台正确运行
+
+@attached
+def observation_process(raw_obs):
+    """
+    该函数是特征处理的重要函数, 主要负责：
+        - 解析原始数据里的信息
+        - 解析预处理后的特征数据
+        - 对特征进行处理, 并返回处理后的特征向量
+        - 特征的拼接
+        - 合法动作的标注
+    函数的输入：
+        - raw_obs: 预处理后的特征数据
+        - env_info: 游戏返回的环境信息
+    函数的输出：
+        - observation: 特征向量
+        - legal_action: 合法动作的标注
+    """
+
+    feature, legal_act = [], []
+
+    # 对预处理后的特征数据按照协议进行解包
+    norm_pos = raw_obs.feature.norm_pos
+
+    # 进行若干特征处理
+    # ...
+
+    # 拼接特征数据
+    feature = (
+        norm_pos
+        + one_hot_pos
+        + end_pos_features
+        + treasure_poss_features
+        + [buff_availability, talent_availability]
+    )
+    feature_map = obstacle_map + end_map + treasure_map + memory_map
+
+    # 合法动作
+    legal_act = list(raw_obs.legal_act)
+
+    # 打包成用户定义的数据结构ObsData并返回
+    return ObsData(feature=feature+feature_map, legal_act=legal_act)
+    
+@attached
+def action_process(act_data):
+    # 将ActData类型的数据转换为重返秘境环境能使用的action
+    result = act_data.move_dir
+    result += act_data.use_talent * 8
+    return result
+
+@attached
+def sample_process(list_game_data):
+    """
+    样本处理: N/A
+    """
+    return [SampleData(**i.__dict__) for i in list_game_data]
+
+
+为了支持分布式训练，样本数据需要进行网络传输，由于SampleData无法直接进行网络传输，需要先转换成Numpy的Array，待传输到对端之后再由np.Array转换成SampleData。所以用户需要实现两个转换函数SampleData2NumpyData和NumpyData2SampleData，这两个函数互为反函数。以下是代码包中这两个函数的示例代码：
+
+注意：这两个函数的实现都必须包含一个装饰器@attached
+
+@attached
+def SampleData2NumpyData(g_data):
+    return np.hstack(
+        (
+            np.array(g_data.obs, dtype=np.float32),
+            np.array(g_data._obs, dtype=np.float32),
+            np.array(g_data.obs_legal, dtype=np.float32),
+            np.array(g_data._obs_legal, dtype=np.float32),
+            np.array(g_data.act, dtype=np.float32),
+            np.array(g_data.rew, dtype=np.float32),
+            np.array(g_data.ret, dtype=np.float32),
+            np.array(g_data.done, dtype=np.float32),
+        )
+    )
+
+@attached
+def NumpyData2SampleData(s_data):
+    return SampleData(
+        obs=s_data[:10808],
+        _obs=s_data[10808:21616],
+        obs_legal=s_data[-8:-6],
+        _obs_legal=s_data[-6:-4],
+        act=s_data[-4],
+        rew=s_data[-3],
+        ret=s_data[-2],
+        done=s_data[-1],
+    )
+
+
+奖励设计
+这里的奖励特指强化学习中的Reward，注意要与项目简介中的计分规则区别开。任务得分用于衡量玩家在任务中的表现，也作为衡量强化学习训练后的模型的优劣。代码包里提供了一些奖励的实现，可以参考这部分代码<算法名称>/feature/definition.py里的reward_shaping函数修改各个奖励的权重。
+
+不仅可以设置权重，同学们还可以在<算法名称>/feature/definition.py里的reward_shaping函数去实现自己的reward设计。
+
+
+算法开发
+重返秘境目前支持以下算法：DQN，Target-DQN，另外，我们还留了一个未实现的算法DIY，提供给用户进行自定义算法的实现，以上每个算法的开发流程都是一致的，所以这里以 DQN 的代码为例，讲解 DQN 是如何实现的：
+
+首先，如果我们需要实现一个神经网络模型，我们需要在文件<算法名称>/model/model.py中实现一个Model类，即用pytorch实现一个神经网络模型。
+
+然后，我们需要在文件<算法名称>/algorithm/agent.py中实现一个 Agent类。注意Agent类需要继承 kaiwu_agent.agent.base_agent 的 BaseAgent 类，Agent类的实现需要符合BaseAgent类的接口规范
+
+注意：Agent类必须使用@attached装饰器，代码默认已实现，注意不要删除。
+
+class BaseAgent:
+    """
+    Agent 的基类，所有的 Agent 都应该继承自这个类"""
+    def __init__(self, agent_type="player", device=None, logger=None, monitor=None) -> None:
+        raise NotImplementedError
+
+    def learn(self, list_sample_data) -> dict:
+        """
+        用于学习的函数，接受一个 SampleData 的列表
+        """
+        raise NotImplementedError
+
+    def predict(self, list_obs_data: list) -> list:
+        """
+        用于获取动作的函数，接受一个 ObsData 的列表, 返回一个动作列表
+        """
+        raise NotImplementedError
+
+    def exploit(self, list_obs_data: list) -> list:
+        """
+        用于获取动作的函数，接受一个 ObsData 的列表, 返回一个动作列表
+        """
+        raise NotImplementedError
+
+    def save_model(self, path, id='1'):
+        raise NotImplementedError
+
+    def load_model(self, path, id='1'):
+        raise NotImplementedError
+
+
+Agent类有三个核心的方法predict，exploit，和learn，其中predict和exploit方法负责进行预测，区别在于前者是智能体训练时调用的方法，一般是依策略的概率分布采样或引入随机概率，后者是智能体在评估时调用的方法，一般是选取策略中概率最高的动作或者策略认为最优的动作；learn方法中实现了核心算法，主要负责消费样本进行模型训练，其示例代码如下：
+
+"""
+DQN/algorithm/agent.py
+"""
+@attached
+class Agent(base_dqn.Agent):
+    def __init__(self, agent_type="player", device="cpu", logger=None, monitor=None):
+        # 进行若干初始化操作
+        # ...
+
+    @predict_wrapper
+    def predict(self, list_obs_data):
+        return self.__predict_detail(list_obs_data, exploit_flag=False)
+
+    @exploit_wrapper
+    def exploit(self, list_obs_data):
+        return self.__predict_detail(list_obs_data, exploit_flag=True)
+
+    @learn_wrapper
+    def learn(self, list_sample_data):
+        # 算法详细代码不在此处展示
+
+
+
+Agent类还有两个方法save_model和load_model分别用来保存模型和加载模型，注意模型默认的前缀model.ckpt-不要改动，可以通过id区分不同的模型，在我们的DQN实例中，模型是标准的pytorch格式，所以保存模型和加载分别调用torch.save和torch.load，以下为示例代码：
+
+"""
+DQN/algorithm/agent.py
+"""
+@attached
+class Agent(BaseAgent):
+    # ...... 此处省略一些代码
+
+    @save_model_wrapper
+    def save_model(self, path=None, id="1"):
+        # To save the model, it can consist of multiple files,
+        # and it is important to ensure that each filename includes the "model.ckpt-id" field.
+        # 保存模型, 可以是多个文件, 需要确保每个文件名里包括了model.ckpt-id字段
+        model_file_path = f"{path}/model.ckpt-{str(id)}.pkl"
+
+        # Copy the model's state dictionary to the CPU
+        # 将模型的状态字典拷贝到CPU
+        model_state_dict_cpu = {k: v.clone().cpu() for k, v in self.model.state_dict().items()}
+        torch.save(model_state_dict_cpu, model_file_path)
+
+        self.logger.info(f"save model {model_file_path} successfully")
+
+    @load_model_wrapper
+    def load_model(self, path=None, id="1"):
+        # When loading the model, you can load multiple files,
+        # and it is important to ensure that each filename matches the one used during the save_model process.
+        # 加载模型, 可以加载多个文件, 注意每个文件名需要和save_model时保持一致
+        model_file_path = f"{path}/model.ckpt-{str(id)}.pkl"
+        self.model.load_state_dict(
+            torch.load(model_file_path, map_location=self.device),
+        )
+
+        self.logger.info(f"load model {model_file_path} successfully")
+
+
+
+注意：Agent类的五个核心方法必须使用相应的装饰器，例如learn方法必须使用@learn_wrapper装饰器。代码默认已实现，注意不要删除。
+
+
+强化学习流程
+在实现了 数据结构，数据处理函数，模型和 智能体 以及其他方法（如奖励处理函数）后，我们还需要实现一个强化学习的训练流程workflow将所有组件结合起来完成强化学习训练，即智能体通过不断的与环境交互，获取样本数据，更新并迭代模型，直到模型收敛。
+
+完成了上述组件之后，需要再实现一个强化学习的训练流程workflow，来让智能体 Agent 和环境 Environment 不断的交互从而产生训练样本并更新模型。开悟标准化的强化学习训练流程包含：
+
+获取env和agent
+监控数据初始化
+进入训练主循环
+使用用户自定义的配置调用env.reset获得环境的第一帧
+进入环境的episode循环
+调用observation_process进行特征处理，得到ObsData类型的数据
+调用agent.predict, 执行智能体决策，得到ActData类型的数据
+调用action_process将上一步的ActData类型数据转换为env能处理的动作
+调用env.step，执行动作与环境交互, 获取下一帧的状态
+计算 reward
+收集当前帧的所有信息
+若episode结束或达到训练条件，调用sample_process处理当前收集到的所有信息并生成样本
+若有样本生成则调用agent.learn进行训练
+调用agent.load_model从模型同步服务更新最新模型
+以适当时间上报适当的监控数据
+训练结束，保存最终模型
+开发流程
+为了实现这个强化学习训练流程，我们需要在文件<算法名称>/train_workflow.py中实现一个 workflow方法。我们继续以DQN为例
+
+注意：workflow函数需要装饰器@attached，该代码不能删除！
+
+"""
+DQN/train_workflow.py
+"""
+@attached
+def workflow(envs, agents, logger=None, monitor=None):
+    env, agent = envs[0], agents[0]
+    epoch_num = 100000
+    episode_num_every_epoch = 1
+    g_data_truncat = 256
+    last_save_model_time = 0
+
+    for epoch in range(epoch_num):
+        epoch_total_rew = 0
+        data_length = 0
+        for g_data in run_episodes(episode_num_every_epoch, env, agent, g_data_truncat, logger):
+            data_length += len(g_data)
+            total_rew = sum([i.rew for i in g_data])
+            epoch_total_rew += total_rew
+            agent.learn(g_data)
+            g_data.clear()
+
+
+workflow的输入接口为：
+
+envs：环境列表，通过调用开悟场景库， env = kaiwu_env.make("back_to_the_realm") 得到重返秘境环境, 并作为输入传入 workflow。
+agents：智能体列表，通过调用用户实现的 xxx/algorithm/agent.py 实例化 Agent, 并作为输入传入 workflow。
+logger：日志，开悟提供的日志组件，接口与常见的 python 的 logging 库一致。
+monitor：监控，开悟提供的监控组件，详情参见监控介绍。
+下面展示了如何使用 usr_conf 来实现自定义的环境配置：
+
+for episode in range(EPISODES):
+    # 用户自定义的环境启动配置
+    usr_conf = {
+        "diy": {
+            "start": 2,
+            "end": 1,
+            # "treasure_id": [4, 5, 6, 7, 8, 9],
+            "treasure_random": 1,
+            "talent_type": 1,
+            "treasure_num": 8,
+            "max_step": 2000,
+        }
+    }
+
+    # 重置环境, 并获取初始状态
+    obs = env.reset(usr_conf=usr_conf)
+
+    # 特征处理
+    obs_data = observation_process(obs)
+
+下面是一个任务循环的实现，基本是开发者之前实现的各个组件的调用：
+
+# 任务循环
+done = False
+while not done:
+    # Agent performs inference, gets the predicted action for the next frame
+    # Agent 进行推理, 获取下一帧的预测动作
+    act_data = agent.predict(list_obs_data=[obs_data])[0]
+
+    # Unpack ActData into action
+    # ActData 解包成动作
+    act = action_process(act_data)
+
+    # Interact with the environment, execute actions, get the next state
+    # 与环境交互, 执行动作, 获取下一步的状态
+    frame_no, _obs, score, terminated, truncated, _env_info = env.step(act)
+    if _obs == None:
+        break
+
+    step += 1
+
+    # Feature processing
+    # 特征处理
+    _obs_data = observation_process(_obs, _env_info)
+
+    # Disaster recovery
+    # 容灾
+    if truncated and frame_no == None:
+        break
+
+    treasures_num = 0
+
+    # Calculate reward
+    # 计算 reward
+    if env_info == None:
+        reward = 0
+    else:
+        reward, is_bump = reward_shaping(
+            frame_no,
+            score,
+            terminated,
+            truncated,
+            obs,
+            _obs,
+            env_info,
+            _env_info,
+        )
+
+        treasure_dists = [pos.grid_distance for pos in _obs.feature.treasure_pos]
+        treasures_num = treasure_dists.count(1.0)
+
+        # Wall bump behavior statistics
+        # 撞墙行为统计
+        bump_cnt += is_bump
+
+    done = terminated or truncated
+
+    # Construct frame
+    # 构造游戏帧，为构造样本做准备
+    frame = Frame(
+        obs=obs_data.feature,
+        _obs=_obs_data.feature,
+        obs_legal=obs_data.legal_act,
+        _obs_legal=_obs_data.legal_act,
+        act=act,
+        rew=reward,
+        done=done,
+        ret=reward,
+    )
+
+    collector.append(frame)
+
+    # If the game is over, the sample is processed and sent to training
+    # 如果游戏结束，则进行样本处理，将样本送去训练
+    if done:
+        if len(collector) > 0:
+            collector = sample_process(collector)
+            # 返回样本数据, agent会调用agent.learn(g_data)进行训练
+            yield collector
+        break
+
+    # Status update
+    # 状态更新
+    obs_data = _obs_data
+    obs = _obs
+    env_info = _env_info
+
+
+下面是监控功能的一个展示：
+
+@attached
+class Agent(BaseAgent):
+    @learn_wrapper
+    def learn(self, list_sample_data):
+        # Periodically report monitoring
+        # 按照间隔上报监控
+        now = time.time()
+        if now - self.last_report_monitor_time >= 60:
+            monitor_data = {
+                "value_loss": value_loss,
+                "q_value": q_value,
+                "reward": reward,
+                "diy_1": model_grad_norm,
+                "diy_2": 0,
+                "diy_3": 0,
+                "diy_4": 0,
+                "diy_5": 0,
+            }
+            if self.monitor:
+                self.monitor.put_data({os.getpid(): monitor_data})
+    
+
+在上面的例子中可以看到，我们通过时间间隔上报监控，时间间隔＞60时，上报一些算法指标。
+
+monitor和logger由workflow传入，用户也可以根据需要在自己的代码中使用。
+
+补充说明：
+
+如果在本地训练DIY算法时，遇到电脑卡顿，CPU占用过多的情况，请在diy算法文件夹下的agent.py中通过以下代码调整线程数，推荐设置为1。
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
+
+模型保存
+代码包中提供的workflow示例代码会保存模型，你也可以在workflow代码中的任意时机调用agent.save_model保存中间模型。 注意：虽然agent.save_model接受path和id两个参数，但在分布式训练时，workflow中调用该接口传入的参数会被框架覆盖成实际的模型保存路径以及最新的训练步数。
+
+为了避免用户保存模型的频率过于频繁，模型保存会有安全限制，限制规则如下：
+
+保存模型的频率限制: 2次/分钟
+单个任务保存模型的次数限制：（不同算法的限制不同）
+DQN or Target-DQN：100次
+DIY：100次
+
+评估模式
+开悟平台支持评估模式，帮助用户在训练后评估模型的能力。相比较训练时用户可以在每一局设置usr_conf，评估时用户需要在提交任务界面进行宝箱配置。另外，训练模式时，用户一般使用agent.predict方法进行决策；而在评估模式时，平台会调用agent.exploit方法进行决策，一般情况下，模型在训练和评估时的决策会因算法不同和用户设计不同，而有不同的行为，这部分由用户定义和实现。
+
+
+代码调试
+在代码包的根目录，我们提供了代码测试脚本train_test.py，该脚本将使用算法文件夹下train_workflow.py中的workflow进行一次训练，当训练步数>0时判定本次代码测试通过。通过启动一次训练，脚本能够迅速验证流程中的各个环节是否正确进行，确保训练逻辑的准确性。
+
+为避免训练模型时出现因代码问题导致的错误，我们建议你在正式训练前一定要对代码进行测试。操作如下：
+
+将train_test.py文件中algorithm_name的值修改为需要测试的算法名，算法名需要是algorithm_name_list中的一个。
+进入IDE工具栏的【运行与调试】工具，点击下图所示绿色箭头的 运行 按钮。启动后，IDE会开始对代码进行测试，并将运行结果输出到右侧面板下方的终端区域，以方便你进行观察和分析。
+code_test
+在代码测试过程中如果遇到错误，则测试流程自动中止。此时你可以根据下方的终端面板查看错误信息，根据错误信息定位代码的问题。
+
+如果没有遇到错误，则代码测试流程会在一次强化训练结束后自动终止（几分钟左右，请耐心等待），并在下方的终端面板提示Train test succeed。

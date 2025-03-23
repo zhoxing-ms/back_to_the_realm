@@ -1,0 +1,183 @@
+数据协议
+为了方便同学们调用原始数据和特征数据，下面提供了完整的通信协议供大家查阅
+
+// env 向 aisrv 发送请求
+message AIServerRequest {
+  string game_id = 1;       // 当前游戏 ID
+  int32 frame_no = 2;       // 当前帧号
+  Observation obs = 3;      // 环境提供的 state
+  ScoreInfo score_info = 4; // 环境提供的 score
+  int32 terminated = 5;     // 游戏是否结束
+  int32 truncated = 6;      // 游戏是否中断
+  EnvInfo env_info = 7;     // 环境信息
+}
+
+// aisrv 向 env 发送响应
+message AIServerResponse {
+  string game_id = 1;  // 当前游戏 ID
+  int32 frame_no = 2;  // 当前帧号
+  Action action = 3;   // 本次需要执行指令
+  int32 stop_game = 4; // aisrv 主动结束本局游戏
+}
+
+message Observation {
+  RealmFeature feature = 1;     // 特征数据
+  repeated int32 legal_act = 2; // 合法动作
+}
+
+message ScoreInfo {
+  int32 score = 1;              // 英雄即时得分（目前只有可能通过宝箱/终点获得）
+  int32 total_score = 2;        // 英雄累计得分
+  int32 treasure_count = 3;     // 收集到的宝箱数量
+  int32 buff_count = 4;         // 收集到的buff数量
+  int32 talent_count = 5;       // 使用天赋技能的次数
+}
+
+message EnvInfo {
+  FrameState frame_state = 1;   // 游戏帧数据
+  GameInfo game_info = 2;       // 游戏信息
+}
+
+message Action {
+  int32 move_dir = 1;        // 移动的方向(8维)
+  int32 use_talent = 2;      // 使用召唤师技能
+}
+
+message RealmFeature {
+  FloatPosition norm_pos = 1;          // 归一化后的绝对坐标
+  Position grid_pos = 2;               // 网格坐标
+  RelativePosition start_pos = 3;      // 起点的相对位置
+  RelativePosition end_pos = 4;        // 终点的相对位置
+  RelativePosition buff_pos = 5;       // 加速增益的相对位置
+  repeated RelativePosition treasure_pos = 6;   // 宝箱的相对位置
+  repeated int32 obstacle_map = 7;              // 周边障碍物信息
+  repeated float memory_map = 8;                // 周边记忆地图信息
+  repeated int32 treasure_map = 9;              // 周边宝箱信息
+  repeated int32 end_map = 10;                  // 周边终点信息
+}
+
+message FloatPosition {
+  float x = 1;                // x坐标
+  float z = 2;                // z坐标
+}
+
+message RelativePosition {
+  RelativeDirection direction = 1;    // 相对方位（离散化）
+  RelativeDistance l2_distance = 2;   // L2距离（离散化)
+  RelativeDistance path_distance = 3; // 最短路径距离（离散化）
+  float grid_distance = 4;            // 栅格化后的最短路径距离（归一化）
+}
+
+// 离散化的相对方向
+enum RelativeDirection {
+  RELATIVE_DIRECTION_NONE = 0;
+  East = 1;
+  NorthEast = 2;
+  North = 3;
+  NorthWest = 4;
+  West = 5;
+  SouthWest = 6;
+  South = 7;
+  SouthEast = 8;
+}
+
+// 离散化的相对距离
+enum RelativeDistance {
+  RELATIVE_DISTANCE_NONE = 0;
+  VerySmall = 1;
+  Small = 2;
+  Medium = 3;
+  Large = 4;
+  VeryLarge = 5;
+}
+
+// [FrameState, GameInfo, Command] 由 Game 定义，与 Scene 交互
+message FrameState {
+  int32 frame_no = 1;              // 帧号
+  repeated RealmHero heroes = 2;   // 英雄状态
+  repeated RealmOrgan organs = 3;  // 物件状态
+}
+
+message GameInfo {
+  float score = 1;        // 即时得分
+  float total_score = 2;  // 总得分
+  int32 step_no = 3;      // 步号
+  Position pos = 4;        // 英雄当前位置
+  int32 treasure_count = 5;  // 收集到的宝箱数量
+  int32 treasure_score = 6;  // 收集到的宝箱得分
+  int32 buff_count = 7;   // 收集到的buff数量
+  int32 talent_count = 8; // 使用技能的数量
+  int32 buff_remain_time = 9; // 剩余加速时间
+  int32 buff_duration = 10;    // 总加速时间
+}
+
+message Command {
+  int32 hero_id = 1;            // 英雄id
+  int32 move_dir = 2;           // 移动方向
+  int32 talent_type = 3;        // 天赋技能
+  Position move_pos = 4;        // 移动位置
+}
+
+// 英雄信息
+message RealmHero {
+  int32 hero_id = 1;          // 英雄id
+  Position pos = 2;           // 英雄当前位置
+  int32 speed_up = 3;         // 英雄是否处于加速状态(0表示默认速度，1表示加速)
+  Talent talent = 4;          // 召唤师技能
+}
+
+// 召唤师技能
+message Talent {
+  int32 talent_type = 1;  // 技能名
+  int32 status = 2;       // 技能状态，0表示CD中，1表示available
+  int32 cooldown = 3;     // 技能剩余冷却时间
+}
+
+message RealmOrgan {
+  int32 sub_type = 1;     // 物件类型，1代表宝箱, 2代表加速buff
+  int32 config_id = 2;    // 物件id
+  int32 status = 3;       // 0表示不可获取，1表示可获取
+  Position pos = 4;       // 物件位置坐标
+  int32 cooldown = 5;     // 物件剩余冷却时间
+}
+
+// [StartInfo, EndInfo, GameStatus] 由 platform 定义, 与 scene 交互
+message StartInfo {
+  Position start = 1;             // 起点坐标
+  Position end = 2;               // 终点坐标
+  repeated RealmOrgan organs = 3; // 物件信息
+}
+
+message Frame {
+  int32 frame_no = 1;             // 帧号
+  int32 step_no = 2;              // 步号
+  RealmHero hero = 3;             // 英雄信息
+  repeated RealmOrgan organs = 4; // 物件信息
+  GameInfo game_info = 5;         // 游戏信息
+}
+
+message Frames {
+  repeated Frame frames = 1;
+}
+
+message EndInfo {
+  int32 frame = 1;            // 总帧数
+  int32 step = 2;             // 总步数
+  int32 total_score = 3;      // 总得分
+  int32 treasure_count = 4;   // 宝箱数量
+  int32 treasure_score = 5;   // 宝箱得分
+  int32 buff_count = 6;   // 收集到的buff数量
+  int32 talent_count = 7; // 使用技能的数量
+}
+
+message UsrConf {
+  int32 start_pos_id = 1;      // 起点位置id
+  int32 end_pos_id = 2;        // 终点位置id
+  int32 treasure_pos_id = 3;   // 宝箱位置id
+  int32 talent_id = 4;         // 召唤师技能id
+}
+
+message Position {
+  int32 x = 1;                // x坐标
+  int32 z = 2;                // z坐标
+}
