@@ -20,27 +20,33 @@ class Model(nn.Module):
     def __init__(self, state_shape, action_shape=0, softmax=False):
         super().__init__()
         cnn_layer1 = [
-            nn.Conv2d(4, 16, kernel_size=3, stride=1, padding=2),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
+            nn.Conv2d(4, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
         ]
         cnn_layer2 = [
-            nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=2),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
         ]
         cnn_layer3 = [
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=2),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
         ]
-        max_pool = [nn.MaxPool2d(kernel_size=(2, 2))]
-        self.cnn_layer = cnn_layer1 + max_pool + cnn_layer2 + max_pool + cnn_layer3 + max_pool
+        cnn_layer4 = [
+            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+        ]
+        adaptive_pool = [nn.AdaptiveAvgPool2d((4, 4))]
+        flatten_layer = [nn.Flatten()]
+        self.cnn_layer = cnn_layer1 + cnn_layer2 + cnn_layer3 + cnn_layer4 + adaptive_pool + flatten_layer
         self.cnn_model = nn.Sequential(*self.cnn_layer)
 
-        fc_layer1 = [nn.Linear(np.prod(state_shape), 256), nn.ReLU(inplace=True)]
-        fc_layer2 = [nn.Linear(256, 128), nn.ReLU(inplace=True)]
-        fc_layer3 = [nn.Linear(128, np.prod(action_shape))]
+        fc_layer1 = [nn.Linear(64 * 4 * 4 + state_shape[0], 512), nn.ReLU(inplace=True)]
+        fc_layer2 = [nn.Linear(512, 256), nn.ReLU(inplace=True)]
+        fc_layer3 = [nn.Linear(256, np.prod(action_shape))]
 
         self.fc_layers = fc_layer1 + fc_layer2
 
@@ -69,9 +75,7 @@ class Model(nn.Module):
         feature_vec, feature_maps = s[0], s[1]
         feature_maps = self.cnn_model(feature_maps)
 
-        feature_maps = feature_maps.view(feature_maps.shape[0], -1)
-
-        concat_feature = torch.concat([feature_vec, feature_maps], dim=1)
+        concat_feature = torch.cat([feature_vec, feature_maps], dim=1)
 
         logits = self.model(concat_feature)
         return logits, state

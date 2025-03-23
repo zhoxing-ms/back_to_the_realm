@@ -10,6 +10,7 @@
 """
 
 import torch
+import torch.nn.functional as F
 
 torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
@@ -47,6 +48,7 @@ class Agent(BaseAgent):
         self.lr = Config.START_LR
 
         self.device = device
+        self.lr_scheduler = None
         self.model = Model(
             state_shape=self.obs_shape,
             action_shape=self.act_shape,
@@ -62,6 +64,16 @@ class Agent(BaseAgent):
         self.agent_type = agent_type
         self.logger = logger
         self.monitor = monitor
+
+        # 添加学习率调度器，随着训练进行逐渐减小学习率
+        self.lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optim, step_size=10000, gamma=0.95)
+        
+        # 增加经验回放缓冲区的优先级采样
+        # 从前人经验来看，改进样本采样方式可以提高学习效率
+        self.use_prioritized_replay = False  # 由于需要保持与开悟平台的兼容性，这里只是标记
+        
+        # 添加梯度裁剪来增强训练稳定性
+        self.max_grad_norm = 10.0
 
     def __convert_to_tensor(self, data):
         if isinstance(data, list):
@@ -182,14 +194,27 @@ class Agent(BaseAgent):
         model.train()
         logits, h = model(batch_feature, state=None)
 
-        loss = torch.square(target_q - logits.gather(1, batch_action).view(-1)).mean()
+        # 计算TD误差，可用于后续优先级采样
+        td_error = torch.abs(target_q - logits.gather(1, batch_action).view(-1)).detach()
+        
+        # 使用Huber损失替代MSE损失，对异常值更加鲁棒
+        # 在有噪声环境中，Huber损失比MSE更稳定
+        loss = F.huber_loss(logits.gather(1, batch_action).view(-1), target_q)
         loss.backward()
+        
+        # 应用梯度裁剪来防止梯度爆炸
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+        
         self.optim.step()
+        
+        # 更新学习率
+        if self.lr_scheduler:
+            self.lr_scheduler.step()
 
         self.train_step += 1
 
-        # Update the target network
-        # 更新target网络
+        # 更新目标网络
+        # 改进目标网络更新策略：使用软更新替代硬更新，可以使训练更加稳定
         if self.train_step % self.target_update_freq == 0:
             self.update_target_q()
 
@@ -243,4 +268,8 @@ class Agent(BaseAgent):
         self.logger.info(f"load model {model_file_path} successfully")
 
     def update_target_q(self):
-        self.target_model.load_state_dict(self.model.state_dict())
+        # 实现软更新: target_net = tau * eval_net + (1 - tau) * target_net
+        # 软更新可以使目标网络更平滑地跟踪策略网络，减少学习波动
+        tau = 0.01  # 软更新系数
+        for target_param, param in zip(self.target_model.parameters(), self.model.parameters()):
+            target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)

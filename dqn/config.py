@@ -40,18 +40,18 @@ class Config:
 
     # Exploration factor, see the calculation of epsilon in the function in the above comment
     # 探索因子, epsilon的计算见上面注释中的函数
-    EPSILON_GREEDY_PROBABILITY = 30000
+    EPSILON_GREEDY_PROBABILITY = 40000
 
     # Discount factor GAMMA in RL
     # RL中的回报折扣GAMMA
-    GAMMA = 0.9
+    GAMMA = 0.99
 
     # epsilon
     EPSILON = 0.1
 
     # Initial learning rate
     # 初始的学习率
-    START_LR = 1e-4
+    START_LR = 5e-4
 
     # Configuration about kaiwu usage. The following configurations can be ignored
     # 关于开悟平台使用的配置，是可以忽略的配置，不需要改动

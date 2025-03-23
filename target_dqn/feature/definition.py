@@ -89,6 +89,25 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     # 是否有剩余宝箱
     is_treasures_remain = True if treasure_dists.count(1.0) < 15 else False
 
+    # 获取动作信息，以判断是否使用了闪现
+    is_talent_used = False
+    move_dir = 0
+    use_talent = 0
+    
+    # 检查当前帧与前一帧之间的位置变化，大幅度变化可能表示使用了闪现
+    if env_info and _env_info:
+        prev_pos = env_info.frame_state.heroes[0].pos
+        curr_pos = _env_info.frame_state.heroes[0].pos
+        distance = np.sqrt((curr_pos.x - prev_pos.x) ** 2 + (curr_pos.z - prev_pos.z) ** 2)
+        
+        # 如果距离大于正常移动可达的距离，判定为使用了闪现
+        is_talent_used = distance > 1500  # 阈值可以根据实际情况调整
+        
+        # 计算移动方向
+        if distance > 0:
+            angle = np.arctan2(curr_pos.z - prev_pos.z, curr_pos.x - prev_pos.x)
+            move_dir = int((angle + np.pi) / (np.pi / 4)) % 8
+
     """
     Reward 1. Reward related to the end point
     奖励1. 与终点相关的奖励
@@ -148,14 +167,49 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     奖励4. 与闪现相关的奖励
     """
     reward_flicker = 0
-    # Reward 4.1 Penalty for flickering into the wall (TODO)
-    # 奖励4.1 撞墙闪现的惩罚 (TODO)
-
-    # Reward 4.2 Reward for normal flickering (TODO)
-    # 奖励4.2 正常闪现的奖励 (TODO)
-
-    # Reward 4.3 Reward for super flickering (TODO)
-    # 奖励4.3 超级闪现的奖励 (TODO)
+    
+    # Reward 4.1 Penalty for flickering into the wall
+    # 奖励4.1 撞墙闪现的惩罚 
+    if is_talent_used and is_bump:
+        # 撞墙闪现的惩罚应该比普通撞墙大，因为浪费了一个重要的技能
+        reward_flicker -= 50
+    
+    # Reward 4.2 Reward for normal flickering
+    # 奖励4.2 正常闪现的奖励
+    elif is_talent_used and not is_bump:
+        # 通过观察目标位置是否更靠近目标来判断闪现质量
+        if is_treasures_remain:
+            # 如果还有宝箱，奖励靠近宝箱的闪现
+            min_treasure_dist = min(treasure_dists)
+            prev_min_treasure_dist = min(prev_treasure_dists)
+            if min_treasure_dist < prev_min_treasure_dist:
+                reward_flicker += 30 * (prev_min_treasure_dist - min_treasure_dist)
+        else:
+            # 如果宝箱已经收集完，奖励靠近终点的闪现
+            if end_dist < prev_end_dist:
+                reward_flicker += 30 * (prev_end_dist - end_dist)
+    
+    # Reward 4.3 Reward for super flickering
+    # 奖励4.3 超级闪现的奖励（穿墙或跨越大障碍）
+    # 超级闪现可以定义为能够跨越障碍物的闪现
+    # 可以通过检查闪现前后路径距离与直线距离的差异来判断
+    if is_talent_used and not is_bump:
+        # 假设闪现前后的网格路径距离变化显著大于实际直线距离，说明闪现穿越了障碍物
+        if is_treasures_remain:
+            # 当还有宝箱时，计算当前与最近宝箱的路径差异
+            min_treasure_idx = treasure_dists.index(min(treasure_dists))
+            prev_min_treasure_idx = prev_treasure_dists.index(min(prev_treasure_dists))
+            
+            if min_treasure_idx == prev_min_treasure_idx:
+                # 计算路径距离与直线距离的比值，比值大说明有障碍
+                path_diff = 256 * (prev_treasure_dists[min_treasure_idx] - treasure_dists[min_treasure_idx])
+                if path_diff > 10:  # 阈值可调
+                    reward_flicker += 40  # 额外奖励穿墙闪现
+        else:
+            # 已收集所有宝箱时，计算与终点的路径差异
+            path_diff = 256 * (prev_end_dist - end_dist)
+            if path_diff > 10:  # 阈值可调
+                reward_flicker += 40  # 额外奖励穿墙闪现
 
     """
     Reward 5. Rewards for quick clearance
@@ -163,10 +217,13 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     """
     reward_step = 1
     # Reward 5.1 Penalty for not getting close to the end point after collecting all the treasure chests
-    # (TODO: Give penalty after collecting all the treasure chests, encourage full collection)
     # 奖励5.1 收集完所有宝箱却未靠近终点的惩罚
-    # (TODO: 收集完宝箱后再给予惩罚, 鼓励宝箱全收集)
-
+    reward_treasure_all_collected = 0
+    if not is_treasures_remain:
+        # 当所有宝箱都收集完毕后，如果不靠近终点则给予惩罚
+        # 惩罚应该与距离终点的远近成正比
+        reward_treasure_all_collected = -30 * end_dist
+    
     # Reward 5.2 Penalty for repeated exploration
     # 奖励5.2 重复探索的惩罚
     reward_memory = 0
@@ -191,17 +248,19 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     and can also add new rewards themselves
     奖励的拼接: 这里提供了10个奖励, 同学们按需自行拼接, 也可以自行添加新的奖励
     """
+    # 优化奖励权重，参考前人经验但进行了调整
     REWARD_CONFIG = {
-        "reward_end_dist": "1.0",
-        "reward_win": "0.5",
-        "reward_buff_dist": "0",
-        "reward_buff": "0",
-        "reward_treasure_dists": "1",
-        "reward_treasure": "0.3",
-        "reward_flicker": "0",
-        "reward_step": "-0.001",
-        "reward_bump": "-0.05",
-        "reward_memory": "-1.0",
+        "reward_end_dist": "1.0",       # 保持较高权重鼓励接近终点
+        "reward_win": "1.0",            # 增加成功达到终点的奖励
+        "reward_buff_dist": "0.2",      # 增加获取buff的激励
+        "reward_buff": "0.5",           # 提高获取buff的奖励
+        "reward_treasure_dists": "1.0",  # 保持较高权重鼓励接近宝箱
+        "reward_treasure": "1.0",       # 增加获取宝箱的奖励权重
+        "reward_flicker": "0.5",        # 添加闪现相关奖励
+        "reward_step": "-0.01",         # 增加步数惩罚以鼓励更快完成
+        "reward_bump": "-0.1",          # 增加撞墙惩罚
+        "reward_memory": "-0.1",        # 适度增加重复探索惩罚
+        "reward_treasure_all_collected": "0.5", # 添加新的收集完宝箱后引导终点的奖励
     }
 
     reward = [
@@ -215,6 +274,7 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
         reward_step * float(REWARD_CONFIG["reward_step"]),
         reward_bump * float(REWARD_CONFIG["reward_bump"]),
         reward_memory * float(REWARD_CONFIG["reward_memory"]),
+        reward_treasure_all_collected * float(REWARD_CONFIG["reward_treasure_all_collected"]),
     ]
 
     return sum(reward), is_bump
@@ -303,11 +363,62 @@ def observation_process(raw_obs, env_info=None):
         end_treasures_id = np.argmin(treasure_dists)
         end_pos_features = read_relative_position(treasure_poss[end_treasures_id])
 
-    # Feature concatenation:
-    # Concatenate all necessary features as vector features (2 + 128*2 + 9  + 9*15 + 2 + 4*51*51 = 10808)
-    # 特征拼接：将所有需要的特征进行拼接作为向量特征 (2 + 128*2 + 9  + 9*15 + 2 + 4*51*51 = 10808)
+    # 添加额外特征：距离最近宝箱的相对方向和距离
+    nearest_treasure_features = []
+    if treasure_dists.count(1.0) < 15:
+        nearest_idx = np.argmin(treasure_dists)
+        nearest_treasure_features = read_relative_position(treasure_poss[nearest_idx])
+    else:
+        # 如果没有可用宝箱，使用空特征
+        nearest_treasure_features = [0] * 9  # 假设read_relative_position返回9个特征
+    
+    # 添加终点方向特征：使用更详细的方向编码
+    # 8方向的独热编码
+    end_direction_one_hot = [0] * 8
+    if end_pos.direction > 0:
+        end_direction_one_hot[end_pos.direction - 1] = 1
+    
+    # 添加buff状态特征
+    buff_status = 0
+    buff_cooldown = 0
+    if env_info:
+        for organ in env_info.frame_state.organs:
+            if organ.sub_type == 2:  # buff类型
+                buff_status = organ.status
+                buff_cooldown = organ.cooldown
+    
+    # 添加技能状态详细特征
+    talent_status = 0
+    talent_cooldown = 0
+    if env_info:
+        talent = env_info.frame_state.heroes[0].talent
+        talent_status = talent.status
+        talent_cooldown = talent.cooldown / 606.0  # 归一化冷却时间，假设最大冷却为606步
+    
+    # 添加已收集宝箱数量特征
+    collected_treasures_count = treasure_dists.count(1.0)
+    total_treasures_count = 15  # 假设最多15个宝箱
+    treasure_collection_ratio = collected_treasures_count / total_treasures_count
+    
+    # 添加当前移动状态特征
+    speed_up = 0
+    if env_info:
+        speed_up = env_info.frame_state.heroes[0].speed_up
+    
+    # 扩展特征向量
+    extended_features = [
+        buff_status, 
+        buff_cooldown / 454.0,  # 归一化buff冷却时间
+        talent_status, 
+        talent_cooldown,
+        treasure_collection_ratio,
+        speed_up
+    ] + nearest_treasure_features + end_direction_one_hot
+    
+    # 更新特征向量
     feature_vec = (
-        norm_pos + one_hot_pos + end_pos_features + treasure_poss_features + [buff_availability, talent_availability]
+        norm_pos + one_hot_pos + end_pos_features + treasure_poss_features + 
+        [buff_availability, talent_availability] + extended_features
     )
     feature_map = obstacle_map + end_map + treasure_map + memory_map
     # Legal actions

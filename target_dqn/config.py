@@ -40,22 +40,22 @@ class Config:
 
     # Update frequency of target network
     # target网络的更新频率
-    TARGET_UPDATE_FREQ = 1000
+    TARGET_UPDATE_FREQ = 500
 
     # Exploration factor, see the calculation of epsilon in the function in the above comment
     # 探索因子, epsilon的计算见上面注释中的函数
-    EPSILON_GREEDY_PROBABILITY = 300000
+    EPSILON_GREEDY_PROBABILITY = 150000
 
     # Discount factor GAMMA in RL
     # RL中的回报折扣GAMMA
-    GAMMA = 0.9
+    GAMMA = 0.99
 
     # epsilon
-    EPSILON = 0.1
+    EPSILON = 0.2
 
     # Initial learning rate
     # 初始的学习率
-    START_LR = 1e-3
+    START_LR = 2e-3
 
     # Configuration about kaiwu usage. The following configurations can be ignored
     # 关于开悟平台使用的配置，是可以忽略的配置，不需要改动
