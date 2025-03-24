@@ -21,8 +21,8 @@ class Config:
     SAMPLE_DIM = 21624
 
     # Size of observation
-    # observation的维度，用户设计了自己的特征之后应该设置正确的维度
-    DIM_OF_OBSERVATION = 0
+    # observation的维度，注意在我们的示例代码中原特征维度是10808，这里是经过CNN处理之后的维度与原始向量特征拼接后的维度
+    DIM_OF_OBSERVATION = 128 + 404
 
     # Dimension of movement action direction
     # 移动动作方向的维度
@@ -32,10 +32,32 @@ class Config:
     # 闪现动作方向的维度
     DIM_OF_TALENT = 8
 
+    # norm_pos + one_hot_pos + end_pos_features + treasure_poss_features + [buff_availability, talent_availability]
+    #  + obstacle_map + treasure_map + end_map + location_memory
+    # 2 + 128*2 + 9  + 9*15 + 2 + 4*51*51 = 10808
+    # 描述如何进行特征分割，示例代码中的特征处理成向量+特征图，以下配置描述了两者的维度
+    DESC_OBS_SPLIT = [404, (4, 51, 51)]  # sum = 10808
+
+    # Exploration factor, see the calculation of epsilon in the function in the above comment
+    # 探索因子, epsilon的计算见上面注释中的函数
+    EPSILON_GREEDY_PROBABILITY = 30000
+
+    # Discount factor GAMMA in RL
+    # RL中的回报折扣GAMMA
+    GAMMA = 0.9
+
+    # epsilon
+    EPSILON = 0.1
+
+    # Initial learning rate
+    # 初始的学习率
+    START_LR = 1e-4
+
     # Configuration about kaiwu usage. The following configurations can be ignored
     # 关于开悟平台使用的配置，是可以忽略的配置，不需要改动
     SUB_ACTION_MASK_SHAPE = 0
     LSTM_HIDDEN_SHAPE = 0
     LSTM_CELL_SHAPE = 0
-    OBSERVATION_SHAPE = 45000
+    OBSERVATION_SHAPE = 4500
     LEGAL_ACTION_SHAPE = 2
+    TARGET_UPDATE_FREQ = 100
