@@ -30,6 +30,7 @@ from kaiwu_agent.agent.base_agent import (
 )
 from kaiwu_agent.utils.common_func import attached
 from diy.config import Config
+from diy.algorithm.per_buffer import PrioritizedReplayBuffer
 
 
 @attached
@@ -63,6 +64,15 @@ class Agent(BaseAgent):
         self.train_step = 0
         self.predict_count = 0
         self.last_report_monitor_time = 0
+        
+        # Initialize PER buffer
+        self.per_buffer = PrioritizedReplayBuffer(
+            capacity=10000,
+            alpha=0.6,
+            beta=0.4,
+            beta_increment=0.001,
+            epsilon=0.01
+        )
 
         self.agent_type = agent_type
         self.logger = logger
@@ -136,8 +146,21 @@ class Agent(BaseAgent):
 
     @learn_wrapper
     def learn(self, list_sample_data):
-
-        t_data = list_sample_data
+        # Add new samples to PER buffer
+        for sample in list_sample_data:
+            self.per_buffer.add(sample)
+            
+        # If buffer is too small, just return
+        if self.per_buffer.tree.size < 32:  # Minimum batch size
+            return
+            
+        # Sample batch from PER buffer
+        batch_size = min(len(list_sample_data), 64)  # Use a reasonable batch size
+        t_data, indices, weights = self.per_buffer.sample(batch_size)
+        
+        # Convert importance sampling weights to tensor
+        weights = torch.FloatTensor(weights).to(self.device)
+        
         batch = len(t_data)
 
         # [b, d]
@@ -187,7 +210,15 @@ class Agent(BaseAgent):
         pred_model.train()
         logits, h = pred_model(batch_feature, state=None)
 
-        loss = torch.square(target_q - logits.gather(1, batch_action).view(-1)).mean()
+        # Calculate TD errors for updating priorities
+        td_errors = torch.abs(target_q - logits.gather(1, batch_action).view(-1)).detach().cpu().numpy()
+        
+        # Update priorities in buffer
+        self.per_buffer.update_priorities(indices, td_errors)
+        
+        # Apply importance sampling weights to loss
+        elementwise_loss = torch.square(target_q - logits.gather(1, batch_action).view(-1))
+        loss = (elementwise_loss * weights).mean()
         loss.backward()
 
         pred_model_grad_norm = torch.nn.utils.clip_grad_norm_(pred_model.parameters(), 1.0)
