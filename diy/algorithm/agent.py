@@ -45,6 +45,7 @@ class Agent(BaseAgent):
         self.obs_split = Config.DESC_OBS_SPLIT
         self._gamma = Config.GAMMA
         self.lr = Config.START_LR
+        self.use_per = False  # Toggle for Prioritized Experience Replay
 
         self.device = device
         self.pred_model = Model(
@@ -146,22 +147,30 @@ class Agent(BaseAgent):
 
     @learn_wrapper
     def learn(self, list_sample_data):
-        # Add new samples to PER buffer
-        for sample in list_sample_data:
-            self.per_buffer.add(sample)
+        # Standard experience replay if PER is disabled
+        if not self.use_per:
+            t_data = list_sample_data
+            batch = len(t_data)
+            # Use uniform weights (all 1.0) for standard experience replay
+            weights = torch.ones(batch).to(self.device)
+            indices = None  # No indices needed for standard experience replay
+        else:
+            # Add new samples to PER buffer
+            for sample in list_sample_data:
+                self.per_buffer.add(sample)
+                
+            # If buffer is too small, just return
+            if self.per_buffer.tree.size < 32:  # Minimum batch size
+                return
+                
+            # Sample batch from PER buffer
+            batch_size = min(len(list_sample_data), 64)  # Use a reasonable batch size
+            t_data, indices, weights = self.per_buffer.sample(batch_size)
             
-        # If buffer is too small, just return
-        if self.per_buffer.tree.size < 32:  # Minimum batch size
-            return
+            # Convert importance sampling weights to tensor
+            weights = torch.FloatTensor(weights).to(self.device)
             
-        # Sample batch from PER buffer
-        batch_size = min(len(list_sample_data), 64)  # Use a reasonable batch size
-        t_data, indices, weights = self.per_buffer.sample(batch_size)
-        
-        # Convert importance sampling weights to tensor
-        weights = torch.FloatTensor(weights).to(self.device)
-        
-        batch = len(t_data)
+            batch = len(t_data)
 
         # [b, d]
         batch_feature_vec = [frame.obs[: self.obs_split[0]] for frame in t_data]
@@ -209,14 +218,14 @@ class Agent(BaseAgent):
         pred_model = getattr(self, "pred_model")
         pred_model.train()
         logits, h = pred_model(batch_feature, state=None)
-
-        # Calculate TD errors for updating priorities
-        td_errors = torch.abs(target_q - logits.gather(1, batch_action).view(-1)).detach().cpu().numpy()
         
-        # Update priorities in buffer
-        self.per_buffer.update_priorities(indices, td_errors)
+        # Update priorities in buffer if using PER
+        if self.use_per and indices is not None:
+            # Calculate TD errors
+            td_errors = torch.abs(target_q - logits.gather(1, batch_action).view(-1)).detach().cpu().numpy()
+            self.per_buffer.update_priorities(indices, td_errors)
         
-        # Apply importance sampling weights to loss
+        # Apply importance sampling weights to loss if using PER, otherwise use standard loss
         elementwise_loss = torch.square(target_q - logits.gather(1, batch_action).view(-1))
         loss = (elementwise_loss * weights).mean()
         loss.backward()
