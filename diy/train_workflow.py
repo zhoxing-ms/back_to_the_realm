@@ -26,36 +26,84 @@ from conf.usr_conf import usr_conf_check
 @attached
 def workflow(envs, agents, logger=None, monitor=None):
     env, agent = envs[0], agents[0]
-    epoch_num = 100000
-    episode_num_every_epoch = 1
-    g_data_truncat = 256
+    
+    # 增加训练轮次以获得更好的性能
+    epoch_num = 150000  # 从100000增加到150000
+    
+    # 增加每轮训练的episode数，提高采样效率
+    episode_num_every_epoch = 2  # 从1增加到2
+    
+    # 增加截断长度以捕获更长的时序依赖
+    g_data_truncat = 512  # 从256增加到512
+    
     last_save_model_time = 0
-
-    # User-defined game start configuration
-    # 用户自定义的游戏启动配置
-    usr_conf = {
-        "diy": {
-            "start": 2,
-            "end": 1,
-            # "treasure_id": [4, 5, 6, 7, 8, 9],
-            "treasure_random": 1,
-            "talent_type": 1,
-            "treasure_num": 8,
-            "max_step": 2000,
-        }
-    }
-
-    # usr_conf_check is a tool to check whether the game configuration is correct
-    # It is recommended to perform a check before calling reset.env
-    # usr_conf_check会检查游戏配置是否正确，建议调用reset.env前先检查一下
-    valid = usr_conf_check(usr_conf, logger)
-    if not valid:
-        logger.error(f"usr_conf_check return False, please check")
-        return
-
+    
+    # 使用更多样化的环境配置进行训练，增强泛化能力
+    usr_conf_templates = [
+        # 基础配置：起点2，终点1，随机8个宝箱
+        {
+            "diy": {
+                "start": 2,
+                "end": 1,
+                "treasure_random": 1,
+                "talent_type": 1,
+                "treasure_num": 8,
+                "max_step": 2000,
+            }
+        },
+        # 难度配置：起点2，终点1，随机12个宝箱
+        {
+            "diy": {
+                "start": 2,
+                "end": 1,
+                "treasure_random": 1,
+                "talent_type": 1,
+                "treasure_num": 12,
+                "max_step": 2000,
+            }
+        },
+        # 固定宝箱配置：用于针对性训练
+        {
+            "diy": {
+                "start": 2,
+                "end": 1,
+                "treasure_id": [3, 4, 5, 6, 7, 8, 9],
+                "treasure_random": 0,
+                "talent_type": 1,
+                "max_step": 2000,
+            }
+        },
+        # 极少宝箱配置：训练直奔终点的策略
+        {
+            "diy": {
+                "start": 2,
+                "end": 1,
+                "treasure_id": [3, 4],
+                "treasure_random": 0,
+                "talent_type": 1,
+                "max_step": 2000,
+            }
+        },
+    ]
+    
+    # 跟踪训练指标
+    best_avg_reward = -float('inf')
+    training_start_time = time.time()
+    
     for epoch in range(epoch_num):
         epoch_total_rew = 0
         data_length = 0
+        
+        # 随机选择一个环境配置
+        usr_conf = usr_conf_templates[epoch % len(usr_conf_templates)]
+        
+        # 检查配置有效性
+        valid = usr_conf_check(usr_conf, logger)
+        if not valid:
+            logger.error(f"usr_conf_check return False, please check")
+            continue
+        
+        # 运行episode并收集数据
         for g_data in run_episodes(episode_num_every_epoch, env, agent, g_data_truncat, usr_conf, logger):
             data_length += len(g_data)
             total_rew = sum([i.rew for i in g_data])
@@ -65,7 +113,14 @@ def workflow(envs, agents, logger=None, monitor=None):
 
         avg_step_reward = 0
         if data_length:
-            avg_step_reward = f"{(epoch_total_rew/data_length):.2f}"
+            avg_step_reward = epoch_total_rew/data_length
+            avg_step_reward_str = f"{avg_step_reward:.2f}"
+        
+        # 记录最佳性能并保存模型
+        if avg_step_reward > best_avg_reward:
+            best_avg_reward = avg_step_reward
+            agent.save_model(id="best")
+            logger.info(f"New best model saved with avg reward: {avg_step_reward_str}")
 
         # save model file
         # 保存model文件
@@ -73,8 +128,19 @@ def workflow(envs, agents, logger=None, monitor=None):
         if now - last_save_model_time >= 120:
             agent.save_model()
             last_save_model_time = now
-
-        logger.info(f"Avg Step Reward: {avg_step_reward}, Epoch: {epoch}, Data Length: {data_length}")
+        
+        # 计算训练时间并记录
+        training_time = (time.time() - training_start_time) / 60  # 分钟
+        
+        logger.info(f"Avg Step Reward: {avg_step_reward_str}, Epoch: {epoch}, Data Length: {data_length}, Training Time: {training_time:.1f} min")
+        
+        # 添加学习率衰减策略
+        if epoch > 0 and epoch % 5000 == 0:
+            # 每5000轮次衰减一次学习率
+            agent.lr *= 0.95
+            for param_group in agent.optim.param_groups:
+                param_group['lr'] = agent.lr
+            logger.info(f"Learning rate decreased to {agent.lr}")
 
 
 def run_episodes(n_episode, env, agent, g_data_truncat, usr_conf, logger):
