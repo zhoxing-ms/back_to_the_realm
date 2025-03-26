@@ -45,7 +45,7 @@ class Agent(BaseAgent):
         self.obs_split = Config.DESC_OBS_SPLIT
         self._gamma = Config.GAMMA
         self.lr = Config.START_LR
-        self.use_per = False  # Toggle for Prioritized Experience Replay
+        self.use_per = True  # Toggle for Prioritized Experience Replay
 
         self.device = device
         self.pred_model = Model(
