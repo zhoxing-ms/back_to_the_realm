@@ -224,12 +224,12 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     reward_step = 1
     # Reward 5.1 Penalty for not getting close to the end point after collecting all the treasure chests
     # 奖励5.1 收集完所有宝箱却未靠近终点的惩罚
-    reward_treasure_all_collected = 0
+    reward_treasure_all_collected_dist = 0
     if not is_treasures_remain:
         # 如果所有宝箱都已收集，对不靠近终点的行为进行惩罚，使用终点距离作为塑形奖励引导智能体前往终点
         # 靠近终点给奖励，远离终点给惩罚
         end_dist_change = prev_end_dist - end_dist
-        reward_treasure_all_collected = end_dist_change * 30
+        reward_treasure_all_collected_dist = end_dist_change * 30
 
     # Reward 5.2 Penalty for repeated exploration
     # 奖励5.2 重复探索的惩罚
@@ -250,7 +250,7 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
 
     # Add each step penalty based on training progress to encourage efficiency 
     # 添加每步惩罚，基于训练进度，鼓励效率
-    if frame_no > 50000:
+    if frame_no > 5000:
         reward_step = +0.005
 
     """
@@ -259,17 +259,17 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     奖励的拼接: 这里提供了10个奖励, 同学们按需自行拼接, 也可以自行添加新的奖励
     """
     REWARD_CONFIG = {
-        "reward_end_dist": "1.0",       # 保持较高权重鼓励接近终点
-        "reward_win": "1.0",            # 增加成功达到终点的奖励
-        "reward_buff_dist": "0.2",      # 增加获取buff的激励
-        "reward_buff": "0.5",           # 提高获取buff的奖励
-        "reward_treasure_dists": "1.0",  # 保持较高权重鼓励接近宝箱
-        "reward_treasure": "1.0",       # 增加获取宝箱的奖励权重
-        "reward_flicker": "0.5",        # 添加闪现相关奖励
-        "reward_step": "-0.01",         # 增加步数惩罚以鼓励更快完成
-        "reward_bump": "-0.1",          # 增加撞墙惩罚
-        "reward_memory": "-0.1",        # 适度增加重复探索惩罚
-        "reward_treasure_all_collected": "0.5", # 添加新的收集完宝箱后引导终点的奖励
+        "reward_end_dist": "0.1",           # 接近终点的奖励
+        "reward_win": "0.2",                # 成功达到终点的奖励
+        "reward_buff_dist": "0.1",          # 增加接近buff的奖励
+        "reward_buff": "0.15",              # 增加获取buff的奖励
+        "reward_treasure_dist": "0.1",     # 接近宝箱的奖励
+        "reward_treasure": "0.15",          # 获取宝箱的奖励
+        "reward_flicker": "0.1",            # 增加闪现的奖励
+        "reward_treasure_all_collected_dist": "0.1", # 收集完宝箱后引导终点的奖励
+        "reward_step": "-0.0005",           # 步数惩罚以鼓励更快完成
+        "reward_bump": "-0.005",            # 撞墙惩罚
+        "reward_memory": "-0.005",          # 复探索惩罚
     }
 
     reward = [
@@ -277,13 +277,13 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
         reward_win * float(REWARD_CONFIG["reward_win"]),
         reward_buff_dist * float(REWARD_CONFIG["reward_buff_dist"]),
         reward_buff * float(REWARD_CONFIG["reward_buff"]),
-        reward_treasure_dist * float(REWARD_CONFIG["reward_treasure_dists"]),
+        reward_treasure_dist * float(REWARD_CONFIG["reward_treasure_dist"]),
         reward_treasure * float(REWARD_CONFIG["reward_treasure"]),
         reward_flicker * float(REWARD_CONFIG["reward_flicker"]),
         reward_step * float(REWARD_CONFIG["reward_step"]),
         reward_bump * float(REWARD_CONFIG["reward_bump"]),
         reward_memory * float(REWARD_CONFIG["reward_memory"]),
-        reward_treasure_all_collected * float(REWARD_CONFIG["reward_treasure_all_collected"]),
+        reward_treasure_all_collected_dist * float(REWARD_CONFIG["reward_treasure_all_collected_dist"]),
     ]
 
     return sum(reward), is_bump
