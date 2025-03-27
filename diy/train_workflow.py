@@ -115,18 +115,19 @@ def workflow(envs, agents, logger=None, monitor=None):
         if data_length:
             avg_step_reward = epoch_total_rew/data_length
             avg_step_reward_str = f"{avg_step_reward:.2f}"
-        
-        # 记录最佳性能并保存模型
-        if avg_step_reward > best_avg_reward:
-            best_avg_reward = avg_step_reward
-            agent.save_model(id="best")
-            logger.info(f"New best model saved with avg reward: {avg_step_reward_str}")
 
         # save model file
         # 保存model文件
         now = time.time()
         if now - last_save_model_time >= 120:
-            agent.save_model()
+            # 记录最佳性能并保存模型
+            if avg_step_reward > best_avg_reward:
+                best_avg_reward = avg_step_reward
+                logger.info(f"New best model saved with avg reward: {avg_step_reward_str}")
+                agent.save_model(id="best_model")
+            else:
+                agent.save_model()
+
             last_save_model_time = now
         
         # 计算训练时间并记录
