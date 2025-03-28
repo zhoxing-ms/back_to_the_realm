@@ -103,7 +103,7 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
         distance = np.sqrt((curr_pos.x - prev_pos.x) ** 2 + (curr_pos.z - prev_pos.z) ** 2)
 
         # 如果距离大于正常移动可达的距离，判定为使用了闪现
-        is_talent_used = distance > 1500  # 阈值可以根据实际情况调整
+        is_talent_used = distance > 4000  # 阈值可以根据实际情况调整
 
         # 计算移动方向
         if distance > 0:
