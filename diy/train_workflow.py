@@ -210,7 +210,7 @@ def run_episodes(n_episode, env, agent, g_data_truncat, usr_conf, logger):
 
         # Feature processing
         # 特征处理
-        obs_data = observation_process(obs)
+        obs_data = observation_process(obs, usr_conf=usr_conf)
 
         done = False
         step = 0
@@ -235,7 +235,7 @@ def run_episodes(n_episode, env, agent, g_data_truncat, usr_conf, logger):
 
             # Feature processing
             # 特征处理
-            _obs_data = observation_process(_obs, _env_info)
+            _obs_data = observation_process(_obs, _env_info, usr_conf)
 
             # Disaster recovery
             # 容灾

@@ -301,7 +301,7 @@ def reward_shaping(usr_conf, frame_no, score, terminated, truncated, obs, _obs, 
 
 
 @attached
-def observation_process(raw_obs, env_info=None):
+def observation_process(raw_obs, env_info=None, usr_conf=None):
     """
     This function is an important feature processing function, mainly responsible for:
         - Parsing information in the raw data
@@ -379,6 +379,7 @@ def observation_process(raw_obs, env_info=None):
     # Feature processing 7: Next treasure chest to find
     # 特征处理7：下一个需要寻找的宝箱
     treasure_dists = [pos.grid_distance for pos in treasure_poss]
+    treasures_total_num = usr_conf["diy"]["treasure_num"]
     if treasure_dists.count(1.0) < treasures_total_num:
         end_treasures_id = np.argmin(treasure_dists)
         end_pos_features = read_relative_position(treasure_poss[end_treasures_id])
