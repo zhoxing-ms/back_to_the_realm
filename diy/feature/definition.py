@@ -139,12 +139,30 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     奖励2. 与宝箱相关的奖励
     """
     reward_treasure_dist = 0
-    # Reward 2.1 Reward for getting closer to the treasure chest (only consider the nearest one)
-    # 奖励2.1 向宝箱靠近的奖励(只考虑最近的那个宝箱)
+    # Reward 2.1 Reward for getting closer to the treasure chest
+    # 奖励2.1 向宝箱靠近的奖励(优先考虑不顺路宝箱中最近的，其次考虑顺路宝箱中最近的)
     if treasure_dists.count(1.0) < len(treasure_dists):
-        prev_min_dist, min_dist = min(prev_treasure_dists), min(treasure_dists)
-        if prev_treasure_dists.index(prev_min_dist) == treasure_dists.index(min_dist):
-            reward_treasure_dist += 2 if min_dist < prev_min_dist else -2
+        # 定义顺路宝箱的位置id
+        on_route_treasure_ids = [2, 15, 10, 14, 0, 9, 13, 1]
+        
+        # 分离顺路和不顺路宝箱
+        off_route_treasures = [(i, dist) for i, dist in enumerate(treasure_dists) if i not in on_route_treasure_ids and dist < 1.0]
+        on_route_treasures = [(i, dist) for i, dist in enumerate(treasure_dists) if i in on_route_treasure_ids and dist < 1.0]
+        
+        # 确定目标宝箱：优先选择不顺路宝箱中最近的，如果没有不顺路宝箱则选择顺路宝箱中最近的
+        target_treasure_id = None
+        if off_route_treasures:
+            # 找到不顺路宝箱中距离最小的
+            target_treasure_id = min(off_route_treasures, key=lambda x: x[1])[0]
+        elif on_route_treasures:
+            # 找到顺路宝箱中距离最小的
+            target_treasure_id = min(on_route_treasures, key=lambda x: x[1])[0]
+        
+        if target_treasure_id is not None:
+            # 比较当前帧和前一帧对目标宝箱的距离
+            curr_dist = treasure_dists[target_treasure_id]
+            prev_dist = prev_treasure_dists[target_treasure_id]
+            reward_treasure_dist += 2 if curr_dist < prev_dist else -2
 
     # Reward 2.2 Reward for getting the treasure chest
     # 奖励2.2 获得宝箱的奖励
@@ -278,7 +296,7 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
         "reward_treasure_all_collected_dist": "0.1", # 收集完宝箱后引导终点的奖励
         "reward_step": "-0.001",           # 步数惩罚以鼓励更快完成
         "reward_bump": "-0.005",            # 撞墙惩罚
-        "reward_memory": "-0.015",          # 增大复探索惩罚
+        "reward_memory": "-0.005",          # 复探索惩罚
     }
 
     reward = [
