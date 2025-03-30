@@ -210,7 +210,7 @@ def run_episodes(n_episode, env, agent, g_data_truncat, usr_conf, logger):
 
         # Feature processing
         # 特征处理
-        obs_data = observation_process(obs, usr_conf=usr_conf)
+        obs_data = observation_process(obs)
 
         done = False
         step = 0
@@ -235,7 +235,7 @@ def run_episodes(n_episode, env, agent, g_data_truncat, usr_conf, logger):
 
             # Feature processing
             # 特征处理
-            _obs_data = observation_process(_obs, _env_info, usr_conf)
+            _obs_data = observation_process(_obs, _env_info)
 
             # Disaster recovery
             # 容灾
@@ -250,7 +250,6 @@ def run_episodes(n_episode, env, agent, g_data_truncat, usr_conf, logger):
                 reward = 0
             else:
                 reward, is_bump = reward_shaping(
-                    usr_conf,
                     frame_no,
                     score,
                     terminated,

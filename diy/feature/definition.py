@@ -49,7 +49,7 @@ SampleData = create_cls(
 )
 
 
-def reward_shaping(usr_conf, frame_no, score, terminated, truncated, obs, _obs, env_info, _env_info):
+def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, _env_info):
     reward = 0
 
     # Get the current position coordinates of the agent
@@ -87,11 +87,9 @@ def reward_shaping(usr_conf, frame_no, score, terminated, truncated, obs, _obs, 
     prev_speed_up = env_info.frame_state.heroes[0].speed_up
     speed_up = _env_info.frame_state.heroes[0].speed_up
 
-    treasures_total_num = usr_conf["diy"]["treasure_num"]
-
     # Are there any remaining treasure chests
     # 是否有剩余宝箱
-    is_treasures_remain = True if treasure_dists.count(1.0) < treasures_total_num else False
+    is_treasures_remain = True if treasure_dists.count(1.0) < len(treasure_dists) else False
     total_collected_treasures = treasure_dists.count(1.0)
 
     # 获取动作信息，以判断是否使用了闪现
@@ -143,7 +141,7 @@ def reward_shaping(usr_conf, frame_no, score, terminated, truncated, obs, _obs, 
     reward_treasure_dist = 0
     # Reward 2.1 Reward for getting closer to the treasure chest (only consider the nearest one)
     # 奖励2.1 向宝箱靠近的奖励(只考虑最近的那个宝箱)
-    if treasure_dists.count(1.0) < treasures_total_num:
+    if treasure_dists.count(1.0) < len(treasure_dists):
         prev_min_dist, min_dist = min(prev_treasure_dists), min(treasure_dists)
         if prev_treasure_dists.index(prev_min_dist) == treasure_dists.index(min_dist):
             reward_treasure_dist += 2 if min_dist < prev_min_dist else -2
@@ -236,7 +234,7 @@ def reward_shaping(usr_conf, frame_no, score, terminated, truncated, obs, _obs, 
         reward_step = step_penalty_scale * 1.0
     else:
         # 后期大惩罚，促进高效
-        reward_step = step_penalty_scale * (1.0 + total_collected_treasures / treasures_total_num)
+        reward_step = step_penalty_scale * (1.0 + total_collected_treasures / len(treasure_dists))
 
     # Reward 5.1 Reward/penalty for approaching endpoint after collecting all treasures
     # 奖励5.1 收集完所有宝箱后靠近终点的奖励/惩罚
@@ -301,7 +299,7 @@ def reward_shaping(usr_conf, frame_no, score, terminated, truncated, obs, _obs, 
 
 
 @attached
-def observation_process(raw_obs, env_info=None, usr_conf=None):
+def observation_process(raw_obs, env_info=None):
     """
     This function is an important feature processing function, mainly responsible for:
         - Parsing information in the raw data
@@ -379,8 +377,7 @@ def observation_process(raw_obs, env_info=None, usr_conf=None):
     # Feature processing 7: Next treasure chest to find
     # 特征处理7：下一个需要寻找的宝箱
     treasure_dists = [pos.grid_distance for pos in treasure_poss]
-    treasures_total_num = usr_conf["diy"]["treasure_num"]
-    if treasure_dists.count(1.0) < treasures_total_num:
+    if treasure_dists.count(1.0) < len(treasure_dists):
         end_treasures_id = np.argmin(treasure_dists)
         end_pos_features = read_relative_position(treasure_poss[end_treasures_id])
 
