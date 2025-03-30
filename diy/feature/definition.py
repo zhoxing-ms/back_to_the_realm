@@ -48,6 +48,7 @@ SampleData = create_cls(
     done=None,
 )
 
+CHECK_TWO_TREASURES = True
 
 def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, _env_info):
     reward = 0
@@ -62,7 +63,7 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     end_dist = _obs.feature.end_pos.grid_distance
     buff_dist = _obs.feature.buff_pos.grid_distance
     treasure_dists = [pos.grid_distance for pos in _obs.feature.treasure_pos]
-
+    remaining_dists = [d for d in treasure_dists if d != 1.0]
     # Get the agent's position from the previous frame
     # 获取智能体上一帧的位置
     prev_pos = env_info.frame_state.heroes[0].pos
@@ -74,7 +75,13 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     prev_end_dist = obs.feature.end_pos.grid_distance
     prev_buff_dist = obs.feature.buff_pos.grid_distance
     prev_treasure_dists = [pos.grid_distance for pos in obs.feature.treasure_pos]
+    prev_remaining_dists = [d for d in prev_treasure_dists if d != 1.0]
 
+
+    end_list = [pos for pos in obs.feature.end_map]
+
+    endInSight = end_list.count(1) >= 1
+    
     # Get the status of the buff
     # 获取buff的状态
     buff_availability = 0
@@ -90,6 +97,8 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     # Are there any remaining treasure chests
     # 是否有剩余宝箱
     is_treasures_remain = True if treasure_dists.count(1.0) < 15 else False
+
+    has2Treasures = len(remaining_dists) == 2 and len(prev_remaining_dists) == 2
 
     """
     Reward 1. Reward related to the end point
@@ -122,9 +131,27 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     # Reward 2.1 Reward for getting closer to the treasure chest (only consider the nearest one)
     # 奖励2.1 向宝箱靠近的奖励(只考虑最近的那个宝箱)
     if treasure_dists.count(1.0) < 15:
-        prev_min_dist, min_dist = min(prev_treasure_dists), min(treasure_dists)
-        if prev_treasure_dists.index(prev_min_dist) == treasure_dists.index(min_dist):
-            reward_treasure_dist += 2 if min_dist < prev_min_dist else -2
+        if has2Treasures and CHECK_TWO_TREASURES:
+            endCloser = end_dist < prev_end_dist
+            prev_treasure_0 = prev_remaining_dists[0]
+            prev_treasure_1 = prev_remaining_dists[1]
+            treasure_0 = remaining_dists[0]
+            treasure_1 = remaining_dists[1]
+            treasure_0_closer = treasure_0 < prev_treasure_0
+            treasure_1_closer = treasure_1 < prev_treasure_1
+            if treasure_0_closer and treasure_1_closer:
+                reward_treasure_dist += 2
+            elif (treasure_0_closer or treasure_1_closer):
+                if endCloser:
+                    reward_treasure_dist -= 20
+                else:
+                    reward_treasure_dist += 2
+            else:
+                reward_treasure_dist -= 2
+        else:
+            prev_min_dist, min_dist = min(prev_treasure_dists), min(treasure_dists)
+            if prev_treasure_dists.index(prev_min_dist) == treasure_dists.index(min_dist):
+                reward_treasure_dist += 2 if min_dist < prev_min_dist else -2
 
     # Reward 2.2 Reward for getting the treasure chest
     # 奖励2.2 获得宝箱的奖励
