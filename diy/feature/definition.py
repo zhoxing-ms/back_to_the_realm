@@ -49,7 +49,7 @@ SampleData = create_cls(
 )
 
 
-def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, _env_info):
+def reward_shaping(usr_conf, frame_no, score, terminated, truncated, obs, _obs, env_info, _env_info):
     reward = 0
 
     # Get the current position coordinates of the agent
@@ -87,13 +87,11 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     prev_speed_up = env_info.frame_state.heroes[0].speed_up
     speed_up = _env_info.frame_state.heroes[0].speed_up
 
+    treasures_total_num = usr_conf["diy"]["treasure_num"]
+
     # Are there any remaining treasure chests
     # 是否有剩余宝箱
-    is_treasures_remain = True if treasure_dists.count(1.0) < 15 else False
-    
-    # 获取已收集的宝箱数量，用于全局奖励计算
-    # Get the number of collected treasures for global reward calculation
-    collected_treasures = treasure_dists.count(1.0) - prev_treasure_dists.count(1.0)
+    is_treasures_remain = True if treasure_dists.count(1.0) < treasures_total_num else False
     total_collected_treasures = treasure_dists.count(1.0)
 
     # 获取动作信息，以判断是否使用了闪现
@@ -123,27 +121,11 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     # Reward 1.1 Reward for getting closer to the end point
     # 奖励1.1 向终点靠近的奖励
 
-    # 优化：添加终点奖励的动态权重，基于已收集宝箱的比例增加终点奖励权重
-    # Optimization: Add dynamic weighting of endpoint rewards based on the proportion of treasures collected
-    treasure_ratio = total_collected_treasures / 15.0  # 宝箱收集比例
-    end_reward_weight = 1.0 + 2.0 * treasure_ratio  # 随宝箱收集比例增加终点奖励权重
-    
     # Boundary handling: At the first frame, prev_end_dist is initialized to 1,
     # and no reward is calculated at this time
     # 边界处理: 第一帧时prev_end_dist初始化为1，此时不计算奖励
-    if prev_end_dist != 1:
-        # 优化：根据收集的宝箱比例动态调整终点奖励
-        # Optimization: Dynamically adjust endpoint reward based on treasure collection ratio
-        if not is_treasures_remain:
-            # 所有宝箱已收集，终点奖励权重高
-            # All treasures collected, endpoint reward weight is high
-            reward_end_dist += 2 * end_reward_weight if end_dist < prev_end_dist else -2 * end_reward_weight
-        else:
-            # 还有宝箱未收集，终点奖励权重低但仍然存在，避免完全忽略终点
-            # Some treasures not collected yet, endpoint reward weight is low but still exists
-            # 这样可以防止智能体在收集宝箱过程中完全偏离终点方向
-            end_dist_weight = 0.2 + 0.8 * treasure_ratio  # 权重随宝箱收集量逐渐增加
-            reward_end_dist += 2 * end_dist_weight if end_dist < prev_end_dist else -1 * end_dist_weight
+    if prev_end_dist != 1 and not is_treasures_remain:
+        reward_end_dist += 2 if end_dist < prev_end_dist else -2
 
     # Reward 1.2 Reward for winning
     # 奖励1.2 获胜的奖励
@@ -159,38 +141,18 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     奖励2. 与宝箱相关的奖励
     """
     reward_treasure_dist = 0
-    reward_treasure = 0
-    
-    # 优化：添加全局路径规划奖励
-    # Optimization: Add global path planning reward
-    if is_treasures_remain:
-        # 计算所有未收集宝箱的平均距离作为全局指标
-        # Calculate average distance to all uncollected treasures as a global metric
-        uncollected_treasure_dists = [dist for idx, dist in enumerate(treasure_dists) 
-                                    if treasure_dists[idx] != 1.0]
-        prev_uncollected_treasure_dists = [dist for idx, dist in enumerate(prev_treasure_dists) 
-                                         if prev_treasure_dists[idx] != 1.0]
-        
-        if uncollected_treasure_dists and prev_uncollected_treasure_dists:
-            avg_treasure_dist = sum(uncollected_treasure_dists) / len(uncollected_treasure_dists)
-            prev_avg_treasure_dist = sum(prev_uncollected_treasure_dists) / len(prev_uncollected_treasure_dists)
-            
-            # 奖励平均宝箱距离的减少，鼓励全局最优路径
-            # Reward decrease in average treasure distance, encouraging globally optimal paths
-            reward_treasure_dist += 3 if avg_treasure_dist < prev_avg_treasure_dist else -1
-            
-            # 添加最近宝箱的奖励，但权重较低，作为局部引导
-            # Add nearest treasure reward but with lower weight, as local guidance
-            prev_min_dist, min_dist = min(prev_uncollected_treasure_dists), min(uncollected_treasure_dists)
-            reward_treasure_dist += 1 if min_dist < prev_min_dist else -0.5
-    
+    # Reward 2.1 Reward for getting closer to the treasure chest (only consider the nearest one)
+    # 奖励2.1 向宝箱靠近的奖励(只考虑最近的那个宝箱)
+    if treasure_dists.count(1.0) < treasures_total_num:
+        prev_min_dist, min_dist = min(prev_treasure_dists), min(treasure_dists)
+        if prev_treasure_dists.index(prev_min_dist) == treasure_dists.index(min_dist):
+            reward_treasure_dist += 2 if min_dist < prev_min_dist else -2
+
     # Reward 2.2 Reward for getting the treasure chest
     # 奖励2.2 获得宝箱的奖励
-    if collected_treasures > 0:
-        # 优化：对获取宝箱给予额外奖励，且随游戏进行奖励逐渐增加
-        # Optimization: Give extra reward for obtaining treasures, increasing as the game progresses
-        progress_bonus = 1.0 + total_collected_treasures / 15.0  # 随已收集宝箱数量增加奖励
-        reward_treasure = 3 * collected_treasures * progress_bonus
+    reward_treasure = 0
+    if prev_treasure_dists.count(1.0) < treasure_dists.count(1.0):
+        reward_treasure = 2
 
     """
     Reward 3. Rewards related to the buff
@@ -270,11 +232,11 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     if frame_no <= 1000:
         # 前期小惩罚，允许探索
         reward_step = step_penalty_scale * 0.5
-    elif frame_no <= 3000:
+    elif frame_no <= 2000:
         reward_step = step_penalty_scale * 1.0
     else:
         # 后期大惩罚，促进高效
-        reward_step = step_penalty_scale * (1.0 + total_collected_treasures / 15.0)
+        reward_step = step_penalty_scale * (1.0 + total_collected_treasures / treasures_total_num)
 
     # Reward 5.1 Reward/penalty for approaching endpoint after collecting all treasures
     # 奖励5.1 收集完所有宝箱后靠近终点的奖励/惩罚
@@ -289,14 +251,7 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     # 奖励5.2 重复探索的惩罚
     reward_memory = 0
     memory_map = obs.feature.memory_map
-    memory_value = memory_map[len(memory_map) // 2]
-
-    # 优化：增强重复探索惩罚，防止来回走同一条路
-    # Optimization: Enhance repeated exploration penalty to prevent going back and forth
-    if memory_value > 0:
-        # 重复探索惩罚随访问次数非线性增加
-        # Repeated exploration penalty increases non-linearly with visit count
-        reward_memory = -memory_value * 1.5  # 增强惩罚
+    reward_memory = memory_map[len(memory_map) // 2]
 
     # Reward 5.3 Penalty for bumping into the wall
     # 奖励5.3 撞墙的惩罚
@@ -309,40 +264,23 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
         # 对撞墙给予一个比较大的惩罚，以便agent能够尽快学会不撞墙
         reward_bump = 200
 
-    # 优化：添加全局规划奖励，基于收集宝箱的数量和终点距离
-    # Optimization: Add global planning reward based on collected treasures and endpoint distance
-    reward_global_planning = 0
-    if is_treasures_remain and total_collected_treasures > 0:
-        # 根据已收集宝箱比例和终点距离计算全局规划得分
-        # Calculate global planning score based on collected treasure ratio and endpoint distance
-        treasure_collection_ratio = total_collected_treasures / 15.0
-        if end_dist < prev_end_dist:
-            # 在收集宝箱的同时不偏离终点方向
-            # Not deviating from endpoint direction while collecting treasures
-            reward_global_planning = 1.0 * treasure_collection_ratio
-        elif end_dist > prev_end_dist:
-            # 偏离终点但可能是为了收集更多宝箱
-            # Deviating from endpoint but possibly to collect more treasures
-            reward_global_planning = 0.5 * treasure_collection_ratio - 0.1
-    
     """
     Concatenation of rewards: Here are 12 rewards provided,
     students can concatenate as needed, and can also add new rewards themselves
-    奖励的拼接: 这里提供了12个奖励, 同学们按需自行拼接, 也可以自行添加新的奖励
+    奖励的拼接: 这里提供了11个奖励, 同学们按需自行拼接, 也可以自行添加新的奖励
     """
     REWARD_CONFIG = {
-        "reward_end_dist": "0.15",           # 接近终点的奖励，增加权重
-        "reward_win": "0.3",                 # 成功达到终点的奖励，增加权重
-        "reward_buff_dist": "0.05",          # 减小接近buff的奖励权重
-        "reward_buff": "0.1",                # 获取buff的奖励
-        "reward_treasure_dist": "0.2",       # 增加接近宝箱的奖励权重，鼓励收集
-        "reward_treasure": "0.25",           # 增加获取宝箱的奖励权重
-        "reward_flicker": "0.15",            # 增加闪现的奖励权重
-        "reward_treasure_all_collected_dist": "0.2", # 增加收集完宝箱引导终点的奖励
-        "reward_step": "-0.001",             # 增加步数惩罚以鼓励更快完成
-        "reward_bump": "-0.008",             # 增加撞墙惩罚
-        "reward_memory": "-0.01",            # 增加重复探索惩罚
-        "reward_global_planning": "0.15",    # 新增全局规划奖励
+        "reward_end_dist": "0.1",           # 接近终点的奖励
+        "reward_win": "0.2",                # 成功达到终点的奖励
+        "reward_buff_dist": "0.1",          # 增加接近buff的奖励
+        "reward_buff": "0.15",              # 增加获取buff的奖励
+        "reward_treasure_dist": "0.1",     # 接近宝箱的奖励
+        "reward_treasure": "0.15",          # 获取宝箱的奖励
+        "reward_flicker": "0.1",            # 增加闪现的奖励
+        "reward_treasure_all_collected_dist": "0.1", # 收集完宝箱后引导终点的奖励
+        "reward_step": "-0.001",           # 步数惩罚以鼓励更快完成
+        "reward_bump": "-0.005",            # 撞墙惩罚
+        "reward_memory": "-0.015",          # 增大复探索惩罚
     }
 
     reward = [
@@ -357,7 +295,6 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
         reward_bump * float(REWARD_CONFIG["reward_bump"]),
         reward_memory * float(REWARD_CONFIG["reward_memory"]),
         reward_treasure_all_collected_dist * float(REWARD_CONFIG["reward_treasure_all_collected_dist"]),
-        reward_global_planning * float(REWARD_CONFIG["reward_global_planning"]),
     ]
 
     return sum(reward), is_bump
@@ -442,7 +379,7 @@ def observation_process(raw_obs, env_info=None):
     # Feature processing 7: Next treasure chest to find
     # 特征处理7：下一个需要寻找的宝箱
     treasure_dists = [pos.grid_distance for pos in treasure_poss]
-    if treasure_dists.count(1.0) < 15:
+    if treasure_dists.count(1.0) < treasures_total_num:
         end_treasures_id = np.argmin(treasure_dists)
         end_pos_features = read_relative_position(treasure_poss[end_treasures_id])
 
