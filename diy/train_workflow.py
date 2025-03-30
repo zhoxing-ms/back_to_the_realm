@@ -26,51 +26,40 @@ from conf.usr_conf import usr_conf_check
 @attached
 def workflow(envs, agents, logger=None, monitor=None):
     env, agent = envs[0], agents[0]
-    
+
     # 增加训练轮次以获得更好的性能
-    epoch_num = 150000  # 从100000增加到150000
-    
+    epoch_num = 200000  # 从100000增加到200000
+
     # 增加每轮训练的episode数，提高采样效率
-    episode_num_every_epoch = 2  # 从1增加到2
-    
+    episode_num_every_epoch = 3  # 从1增加到3
+
     # 增加截断长度以捕获更长的时序依赖
     g_data_truncat = 512  # 从256增加到512
-    
+
     last_save_model_time = 0
-    
+
     # 使用更多样化的环境配置进行训练，增强泛化能力
     usr_conf_templates = [
-        # 基础配置：起点2，终点1，随机8个宝箱
+        # 基础配置：起点2，终点1，随机10个宝箱
         {
             "diy": {
                 "start": 2,
                 "end": 1,
                 "treasure_random": 1,
                 "talent_type": 1,
-                "treasure_num": 8,
+                "treasure_num": 10,
                 "max_step": 2000,
             }
         },
-        # 难度配置：起点2，终点1，随机12个宝箱
+        # 全收集测试 - 全部宝箱的策略
         {
             "diy": {
                 "start": 2,
                 "end": 1,
                 "treasure_random": 1,
                 "talent_type": 1,
-                "treasure_num": 12,
-                "max_step": 2000,
-            }
-        },
-        # 固定宝箱配置：用于针对性训练
-        {
-            "diy": {
-                "start": 2,
-                "end": 1,
-                "treasure_id": [3, 4, 5, 6, 7, 8, 9],
-                "treasure_random": 0,
-                "talent_type": 1,
-                "max_step": 2000,
+                "treasure_num": 13,  # 全部宝箱
+                "max_step": 2000,    # 较长步数限制
             }
         },
         # 极少宝箱配置：训练直奔终点的策略
@@ -78,14 +67,14 @@ def workflow(envs, agents, logger=None, monitor=None):
             "diy": {
                 "start": 2,
                 "end": 1,
-                "treasure_id": [3, 4],
-                "treasure_random": 0,
+                "treasure_random": 1,
                 "talent_type": 1,
+                "treasure_num": 2,
                 "max_step": 2000,
             }
         },
     ]
-    
+
     # 跟踪训练指标
     best_avg_reward = -float('inf')
     training_start_time = time.time()
@@ -129,7 +118,7 @@ def workflow(envs, agents, logger=None, monitor=None):
                 agent.save_model()
 
             last_save_model_time = now
-        
+
         # 计算训练时间并记录
         training_time = (time.time() - training_start_time) / 60  # 分钟
         
