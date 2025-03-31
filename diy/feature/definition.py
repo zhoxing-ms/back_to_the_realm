@@ -236,6 +236,17 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
 
     # 为闪现制定奖励/惩罚策略
     if is_talent_used:
+
+        # 不鼓励过早使用闪现(因为闪现冷却时间太长，步数少的情况基本只能用一次)
+        if frame_no < 300:
+            reward_flicker -= 80
+        elif frame_no < 600:
+            reward_flicker -= 40
+        elif frame_no < 900:
+            reward_flicker -= 20
+        elif frame_no < 1200:
+            reward_flicker -= 10
+
         if is_bump:
             # 撞墙闪现的惩罚
             reward_flicker -= 200
@@ -244,8 +255,8 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
                 # 正确方向的闪现穿墙获得高奖励
                 reward_flicker += 200
             # 正常闪现的奖励
-            if is_treasures_remain and frame_no > 500:
-                # 如果还有宝箱，奖励靠近宝箱的闪现，但是不鼓励过早使用闪现(因为闪现冷却时间太长，基本只能用一次)
+            if is_treasures_remain:
+                # 如果还有宝箱，奖励靠近宝箱的闪现
                 min_treasure_dist = min(treasure_dists)
                 prev_min_treasure_dist = min(prev_treasure_dists)
                 if min_treasure_dist < prev_min_treasure_dist:
