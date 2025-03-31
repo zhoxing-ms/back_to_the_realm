@@ -48,6 +48,11 @@ SampleData = create_cls(
     done=None,
 )
 
+# 全局参数：检查是否仅有两个宝箱
+CHECK_TWO_TREASURES = True
+
+# 全局参数：特殊穿墙宝箱位置 (例如位置5和8之间有墙)
+WALL_BETWEEN_TREASURES = [(5, 8), (2, 7), (4, 13)]
 
 def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, _env_info):
     reward = 0
@@ -62,6 +67,7 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     end_dist = _obs.feature.end_pos.grid_distance
     buff_dist = _obs.feature.buff_pos.grid_distance
     treasure_dists = [pos.grid_distance for pos in _obs.feature.treasure_pos]
+    remaining_treasure_dists = [d for d in treasure_dists if d != 1.0]
 
     # Get the agent's position from the previous frame
     # 获取智能体上一帧的位置
@@ -74,6 +80,7 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     prev_end_dist = obs.feature.end_pos.grid_distance
     prev_buff_dist = obs.feature.buff_pos.grid_distance
     prev_treasure_dists = [pos.grid_distance for pos in obs.feature.treasure_pos]
+    prev_remaining_treasure_dists = [d for d in prev_treasure_dists if d != 1.0]
 
     # Get the status of the buff
     # 获取buff的状态
@@ -90,6 +97,7 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     # Are there any remaining treasure chests
     # 是否有剩余宝箱
     is_treasures_remain = True if treasure_dists.count(1.0) < len(treasure_dists) else False
+    has2Treasures = len(remaining_treasure_dists) == 2 and len(prev_remaining_treasure_dists) == 2
     total_collected_treasures = treasure_dists.count(1.0)
 
     # 获取动作信息，以判断是否使用了闪现
@@ -142,27 +150,27 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     # Reward 2.1 Reward for getting closer to the treasure chest
     # 奖励2.1 向宝箱靠近的奖励(优先考虑不顺路宝箱中最近的，其次考虑顺路宝箱中最近的)
     if treasure_dists.count(1.0) < len(treasure_dists):
-        # 定义顺路宝箱的位置id
-        on_route_treasure_ids = [2, 15, 10, 14, 0, 9, 13, 1]
-        
-        # 分离顺路和不顺路宝箱
-        off_route_treasures = [(i, dist) for i, dist in enumerate(treasure_dists) if i not in on_route_treasure_ids and dist < 1.0]
-        on_route_treasures = [(i, dist) for i, dist in enumerate(treasure_dists) if i in on_route_treasure_ids and dist < 1.0]
-        
-        # 确定目标宝箱：优先选择不顺路宝箱中最近的，如果没有不顺路宝箱则选择顺路宝箱中最近的
-        target_treasure_id = None
-        if off_route_treasures:
-            # 找到不顺路宝箱中距离最小的
-            target_treasure_id = min(off_route_treasures, key=lambda x: x[1])[0]
-        elif on_route_treasures:
-            # 找到顺路宝箱中距离最小的
-            target_treasure_id = min(on_route_treasures, key=lambda x: x[1])[0]
-        
-        if target_treasure_id is not None:
-            # 比较当前帧和前一帧对目标宝箱的距离
-            curr_dist = treasure_dists[target_treasure_id]
-            prev_dist = prev_treasure_dists[target_treasure_id]
-            reward_treasure_dist += 2 if curr_dist < prev_dist else -2
+        if has2Treasures and CHECK_TWO_TREASURES:
+            endCloser = end_dist < prev_end_dist
+            prev_treasure_0 = prev_remaining_treasure_dists[0]
+            prev_treasure_1 = prev_remaining_treasure_dists[1]
+            treasure_0 = remaining_treasure_dists[0]
+            treasure_1 = remaining_treasure_dists[1]
+            treasure_0_closer = treasure_0 < prev_treasure_0
+            treasure_1_closer = treasure_1 < prev_treasure_1
+            if treasure_0_closer and treasure_1_closer:
+                reward_treasure_dist += 2
+            elif (treasure_0_closer or treasure_1_closer):
+                if endCloser:
+                    reward_treasure_dist -= 20
+                else:
+                    reward_treasure_dist += 2
+            else:
+                reward_treasure_dist -= 2
+        else:
+            prev_min_dist, min_dist = min(prev_treasure_dists), min(treasure_dists)
+            if prev_treasure_dists.index(prev_min_dist) == treasure_dists.index(min_dist):
+                reward_treasure_dist += 2 if min_dist < prev_min_dist else -2
 
     # Reward 2.2 Reward for getting the treasure chest
     # 奖励2.2 获得宝箱的奖励
@@ -194,47 +202,41 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     # Reward 4.1 Penalty for flickering into the wall
     # 奖励4.1 撞墙闪现的惩罚
     is_bump = bump(curr_pos_x, curr_pos_z, prev_pos_x, prev_pos_z)
-    if is_talent_used and is_bump:
-        # 撞墙闪现的惩罚应该比普通撞墙大，因为浪费了一个重要的技能
-        reward_flicker -= 50
+    
+    # 检查是否有特殊穿墙情况（位置对，例如位置5可以闪现到位置8但不能从位置8闪现到位置5）
+    crossed_wall_correctly = False  # 正确方向闪现穿墙
 
-    # Reward 4.2 Reward for normal flickering
-    # 奖励4.2 正常闪现的奖励
-    elif is_talent_used and not is_bump:
-        # 通过观察目标位置是否更靠近目标来判断闪现质量
-        if is_treasures_remain:
-            # 如果还有宝箱，奖励靠近宝箱的闪现
-            min_treasure_dist = min(treasure_dists)
-            prev_min_treasure_dist = min(prev_treasure_dists)
-            if min_treasure_dist < prev_min_treasure_dist:
-                reward_flicker += 30 * (prev_min_treasure_dist - min_treasure_dist)
-        else:
-            # 如果宝箱已经收集完，奖励靠近终点的闪现
-            if end_dist < prev_end_dist:
-                reward_flicker += 30 * (prev_end_dist - end_dist)
+    for t1, t2 in WALL_BETWEEN_TREASURES:
+        # 只允许智能体从t1位置闪现到t2位置, 判断智能体是否位于t1附近
+        pre_near_t1 = prev_treasure_dists[t1] < 1000
 
-    # Reward 4.3 Reward for super flickering
-    # 奖励4.3 超级闪现的奖励
-    # 奖励4.3 超级闪现的奖励（穿墙或跨越大障碍）
-    # 超级闪现可以定义为能够跨越障碍物的闪现
-    # 可以通过检查闪现前后路径距离与直线距离的差异来判断
-    if is_talent_used and not is_bump:
-        # 假设闪现前后的网格路径距离变化显著大于实际直线距离，说明闪现穿越了障碍物
-        if is_treasures_remain:
-            # 当还有宝箱时，计算当前与最近宝箱的路径差异
-            min_treasure_idx = treasure_dists.index(min(treasure_dists))
-            prev_min_treasure_idx = prev_treasure_dists.index(min(prev_treasure_dists))
-            
-            if min_treasure_idx == prev_min_treasure_idx:
-                # 计算路径距离与直线距离的比值，比值大说明有障碍
-                path_diff = 256 * (prev_treasure_dists[min_treasure_idx] - treasure_dists[min_treasure_idx])
-                if path_diff > 10:  # 阈值可调
-                    reward_flicker += 40  # 额外奖励穿墙闪现
+        # 判断是否发生了位置的显著变化（闪现）
+        if is_talent_used and not is_bump:
+            # 如果智能体原来在t1附近，现在到了t2附近，这是正确的闪现方向
+            if pre_near_t1 and treasure_dists[t2] < 1000:
+                crossed_wall_correctly = True
+
+    # 为闪现制定奖励/惩罚策略
+    if is_talent_used:
+        if is_bump:
+            # 撞墙闪现的惩罚
+            reward_flicker -= 200
         else:
-            # 已收集所有宝箱时，计算与终点的路径差异
-            path_diff = 256 * (prev_end_dist - end_dist)
-            if path_diff > 10:  # 阈值可调
-                reward_flicker += 40  # 额外奖励穿墙闪现
+            if crossed_wall_correctly:
+                # 正确方向的闪现穿墙获得高奖励
+                reward_flicker += 200
+            # 正常闪现的奖励
+            if is_treasures_remain:
+                # 如果还有宝箱，奖励靠近宝箱的闪现
+                min_treasure_dist = min(treasure_dists)
+                prev_min_treasure_dist = min(prev_treasure_dists)
+                if min_treasure_dist < prev_min_treasure_dist:
+                    reward_flicker += 30 * (prev_min_treasure_dist - min_treasure_dist)
+            else:
+                # 如果宝箱已经收集完，奖励靠近终点的闪现
+                if end_dist < prev_end_dist:
+                    reward_flicker += 30 * (prev_end_dist - end_dist)
+
 
     """
     Reward 5. Rewards for quick clearance
