@@ -208,13 +208,31 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
 
     for t1, t2 in WALL_BETWEEN_TREASURES:
         # 只允许智能体从t1位置闪现到t2位置, 判断智能体是否位于t1附近
-        pre_near_t1 = prev_treasure_dists[t1] < 1000
+        pre_near_t1 = False
+        for organ in env_info.frame_state.organs:
+            if organ.sub_type == 1 and organ.config_id == t1:
+                # 计算智能体与t1位置之间的距离
+                dx = abs(organ.pos.x - curr_pos_x)
+                dz = abs(organ.pos.z - curr_pos_z)
+                distance = (dx**2 + dz**2)**0.5
+                if distance < 500:
+                    pre_near_t1 = True
+                break
 
-        # 判断是否发生了位置的显著变化（闪现）
-        if is_talent_used and not is_bump:
-            # 如果智能体原来在t1附近，现在到了t2附近，这是正确的闪现方向
-            if pre_near_t1 and treasure_dists[t2] < 1000:
-                crossed_wall_correctly = True
+        # 如果智能体原来在t1附近，现在到了t2附近，这是正确的闪现方向
+        near_t2 = False
+        for organ in _env_info.frame_state.organs:
+            if organ.sub_type == 1 and organ.config_id == t2:
+                # 计算智能体与t2位置之间的距离
+                dx = abs(organ.pos.x - curr_pos_x)
+                dz = abs(organ.pos.z - curr_pos_z)
+                distance = (dx**2 + dz**2)**0.5
+                if distance < 500:
+                    near_t2 = True
+                break
+        
+        if pre_near_t1 and near_t2:
+            crossed_wall_correctly = True
 
     # 为闪现制定奖励/惩罚策略
     if is_talent_used:
@@ -226,8 +244,8 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
                 # 正确方向的闪现穿墙获得高奖励
                 reward_flicker += 200
             # 正常闪现的奖励
-            if is_treasures_remain:
-                # 如果还有宝箱，奖励靠近宝箱的闪现
+            if is_treasures_remain and frame_no > 500:
+                # 如果还有宝箱，奖励靠近宝箱的闪现，但是不鼓励过早使用闪现(因为闪现冷却时间太长，基本只能用一次)
                 min_treasure_dist = min(treasure_dists)
                 prev_min_treasure_dist = min(prev_treasure_dists)
                 if min_treasure_dist < prev_min_treasure_dist:
