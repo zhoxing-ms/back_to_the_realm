@@ -230,8 +230,6 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
             reward_flicker -= 40
         elif frame_no < 900:
             reward_flicker -= 20
-        elif frame_no < 1200:
-            reward_flicker -= 10
 
         if is_bump:
             # 撞墙闪现的惩罚
@@ -242,11 +240,11 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
                 reward_flicker += 200
             # 正常闪现的奖励
             if is_treasures_remain:
-                # 如果还有宝箱，奖励靠近宝箱的闪现
-                min_treasure_dist = min(treasure_dists)
-                prev_min_treasure_dist = min(prev_treasure_dists)
-                if min_treasure_dist < prev_min_treasure_dist:
-                    reward_flicker += 30 * (prev_min_treasure_dist - min_treasure_dist)
+                # 如果还有宝箱，奖励靠近未获取宝箱的闪现
+                min_remaining_treasure_dist = min(remaining_treasure_dists)
+                prev_min_remaining_treasure_dist = min(prev_remaining_treasure_dists) if prev_remaining_treasure_dists else 1.0
+                if min_remaining_treasure_dist < prev_min_remaining_treasure_dist:
+                    reward_flicker += 30 * (prev_min_remaining_treasure_dist - min_remaining_treasure_dist)
             else:
                 # 如果宝箱已经收集完，奖励靠近终点的闪现
                 if end_dist < prev_end_dist:
