@@ -98,7 +98,20 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     # 是否有剩余宝箱
     is_treasures_remain = True if treasure_dists.count(1.0) < 15 else False
 
-    has2Treasures = len(remaining_dists) == 2 and len(prev_remaining_dists) == 2
+    # 获取特殊宝箱8和13的距离信息
+    treasure_8 = {
+        'current': treasure_dists[7],
+        'previous': prev_treasure_dists[7]
+    }
+    treasure_13 = {
+        'current': treasure_dists[12],
+        'previous': prev_treasure_dists[12]
+    }
+    
+    # 判断是否只剩下宝箱8和13未收集
+    # 条件：1. 当前和前一帧都只剩2个宝箱 2. 宝箱8和13都未被收集
+    has2Treasures = (len(remaining_dists) == 2 and len(prev_remaining_dists) == 2 and
+                    treasure_8['current'] != 1.0 and treasure_13['current'] != 1.0)
 
     """
     Reward 1. Reward related to the end point
@@ -132,20 +145,16 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     # 奖励2.1 向宝箱靠近的奖励(只考虑最近的那个宝箱)
     if treasure_dists.count(1.0) < 15:
         if has2Treasures and CHECK_TWO_TREASURES:
-            endCloser = end_dist < prev_end_dist
-            prev_treasure_0 = prev_remaining_dists[0]
-            prev_treasure_1 = prev_remaining_dists[1]
-            treasure_0 = remaining_dists[0]
-            treasure_1 = remaining_dists[1]
-            treasure_0_closer = treasure_0 < prev_treasure_0
-            treasure_1_closer = treasure_1 < prev_treasure_1
-            if treasure_0_closer and treasure_1_closer:
+            # 计算两个特殊宝箱的距离变化
+            treasure_8_closer = treasure_8['current'] < treasure_8['previous']
+            treasure_13_closer = treasure_13['current'] < treasure_13['previous']
+            
+            # 根据距离变化调整奖励：
+            # 1. 两个宝箱都靠近 +2
+            # 2. 靠近宝箱8 +2
+            # 3. 靠近宝箱13或远离两个宝箱 -2
+            if treasure_8_closer:
                 reward_treasure_dist += 2
-            elif (treasure_0_closer or treasure_1_closer):
-                if endCloser:
-                    reward_treasure_dist -= 20
-                else:
-                    reward_treasure_dist += 2
             else:
                 reward_treasure_dist -= 2
         else:
