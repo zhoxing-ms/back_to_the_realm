@@ -97,8 +97,9 @@ class PrioritizedReplayBuffer:
     """
     A replay buffer that samples experiences based on their TD error priority.
     Uses a SumTree for efficient priority-based sampling.
+    Supports n-step returns for better long-term reward consideration.
     """
-    def __init__(self, capacity, alpha=0.6, beta=0.4, beta_increment=0.001, epsilon=0.01):
+    def __init__(self, capacity, alpha=0.6, beta=0.4, beta_increment=0.001, epsilon=0.01, n_steps=1, gamma=0.9):
         """
         Initialize the buffer with hyperparameters
         
@@ -108,6 +109,8 @@ class PrioritizedReplayBuffer:
             beta: Controls importance sampling weights (0 = no correction, 1 = full correction)
             beta_increment: How much to increase beta over time
             epsilon: Small constant to add to priorities to ensure non-zero probability
+            n_steps: Number of steps for n-step returns calculation
+            gamma: Discount factor for future rewards
         """
         self.tree = SumTree(capacity)
         self.capacity = capacity
@@ -116,16 +119,83 @@ class PrioritizedReplayBuffer:
         self.beta_increment = beta_increment  # Beta annealing
         self.epsilon = epsilon  # Small constant to avoid zero priority
         self.max_priority = 1.0  # Initial max priority
-
+        
+        # N-step returns parameters
+        self.n_steps = n_steps
+        self.gamma = gamma
+        
+        # Buffer to store transitions temporarily for n-step returns calculation
+        self.n_step_buffer = deque(maxlen=n_steps)
+        
+    def _get_n_step_info(self, n_step_buffer):
+        """
+        Calculate the n-step returns information
+        
+        Returns:
+            (first_obs, first_act, reward, last_obs, done)
+            where reward is the n-step discounted reward
+        """
+        # Get the first observation and action
+        first_obs = n_step_buffer[0][0]  # obs
+        first_act = n_step_buffer[0][1]  # act
+        
+        # Get the latest observation and done flag
+        last_obs = n_step_buffer[-1][2]  # next_obs (_obs)
+        done = n_step_buffer[-1][3]      # done flag
+        
+        # Calculate n-step discounted reward
+        n_step_reward = 0
+        for i, (_, _, _, rew, _) in enumerate(n_step_buffer):
+            n_step_reward += (self.gamma ** i) * rew
+            
+        return first_obs, first_act, n_step_reward, last_obs, done
+    
     def add(self, sample, error=None):
         """
-        Add a new experience to the buffer with priority based on TD error
+        Add a new experience to the n-step buffer. When the buffer reaches n_steps, 
+        calculate the n-step return and add it to the replay buffer.
+        
+        Args:
+            sample: (obs, act, _obs, rew, done, _obs_legal)
+            error: TD error (optional)
         """
+        # Extract data from sample
+        obs = sample.obs
+        act = sample.act
+        _obs = sample._obs
+        rew = sample.rew
+        done = sample.done
+        _obs_legal = sample._obs_legal
+        
+        # Store in n-step buffer
+        self.n_step_buffer.append((obs, act, _obs, rew, _obs_legal))
+        
+        # If this is the first transition or the episode is done, don't wait for n steps
+        if len(self.n_step_buffer) < self.n_steps and not done:
+            return
+        
+        # Calculate n-step returns
+        first_obs, first_act, n_step_reward, last_obs, is_done = self._get_n_step_info(self.n_step_buffer)
+        
+        # Create a modified sample with n-step information
+        from types import SimpleNamespace
+        n_step_sample = SimpleNamespace()
+        n_step_sample.obs = first_obs
+        n_step_sample.act = first_act
+        n_step_sample._obs = last_obs
+        n_step_sample.rew = n_step_reward
+        n_step_sample.done = is_done
+        n_step_sample._obs_legal = self.n_step_buffer[-1][4]  # Use the legal actions of the latest state
+        
         # Use max priority for new samples to encourage exploration
         priority = self.max_priority if error is None else (abs(error) + self.epsilon) ** self.alpha
         
         # Add sample to buffer with priority
-        self.tree.add(priority, sample)
+        self.tree.add(priority, n_step_sample)
+        
+        # If the episode is done, clear the n-step buffer
+        if done:
+            self.n_step_buffer.clear()
 
     def sample(self, batch_size):
         """

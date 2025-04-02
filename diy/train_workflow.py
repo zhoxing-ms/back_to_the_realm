@@ -215,6 +215,9 @@ def run_episodes(n_episode, env, agent, g_data_truncat, usr_conf, logger):
         done = False
         step = 0
         bump_cnt = 0
+        
+        # Store transitions for the episode
+        episode_transitions = []
 
         while not done:
             # Agent performs inference, gets the predicted action for the next frame
@@ -315,3 +318,14 @@ def run_episodes(n_episode, env, agent, g_data_truncat, usr_conf, logger):
             obs_data = _obs_data
             obs = _obs
             env_info = _env_info
+
+        # At the end of the episode, process any remaining n-step transitions
+        if hasattr(agent, 'per_buffer') and hasattr(agent.per_buffer, 'n_step_buffer'):
+            # Force process any remaining transitions in the n-step buffer
+            # This ensures we don't lose experiences at the end of episodes
+            if len(agent.per_buffer.n_step_buffer) > 0:
+                # Learn from the collected data
+                # Note: The agent's learn method should handle the learning from the n-step buffer
+                if len(collector) > 0:
+                    sample_data = sample_process(collector)
+                    agent.learn(sample_data)

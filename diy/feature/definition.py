@@ -51,9 +51,6 @@ SampleData = create_cls(
 # 全局参数：检查是否仅有两个宝箱
 CHECK_TWO_TREASURES = True
 
-# 全局参数：特殊穿墙宝箱位置 (例如位置5和8之间有墙)
-WALL_BETWEEN_TREASURES = [(5, 8), (2, 7), (4, 13)]
-
 def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, _env_info):
     reward = 0
 
@@ -188,61 +185,19 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
     # Reward 4.1 Penalty for flickering into the wall
     # 奖励4.1 撞墙闪现的惩罚
     is_bump = bump(curr_pos_x, curr_pos_z, prev_pos_x, prev_pos_z)
-    
-    # 检查是否有特殊穿墙情况（位置对，例如位置5可以闪现到位置8但不能从位置8闪现到位置5）
-    crossed_wall_correctly = False  # 正确方向闪现穿墙
-
-    for t1, t2 in WALL_BETWEEN_TREASURES:
-        # 只允许智能体从t1位置闪现到t2位置, 判断智能体是否位于t1附近
-        pre_near_t1 = False
-        for organ in env_info.frame_state.organs:
-            if organ.sub_type == 1 and organ.config_id == t1:
-                # 计算智能体与t1位置之间的距离
-                dx = abs(organ.pos.x - curr_pos_x)
-                dz = abs(organ.pos.z - curr_pos_z)
-                distance = (dx**2 + dz**2)**0.5
-                if distance < 500:
-                    pre_near_t1 = True
-                break
-
-        # 如果智能体原来在t1附近，现在到了t2附近，这是正确的闪现方向
-        near_t2 = False
-        for organ in _env_info.frame_state.organs:
-            if organ.sub_type == 1 and organ.config_id == t2:
-                # 计算智能体与t2位置之间的距离
-                dx = abs(organ.pos.x - curr_pos_x)
-                dz = abs(organ.pos.z - curr_pos_z)
-                distance = (dx**2 + dz**2)**0.5
-                if distance < 500:
-                    near_t2 = True
-                break
-        
-        if pre_near_t1 and near_t2:
-            crossed_wall_correctly = True
 
     # 为闪现制定奖励/惩罚策略
     if is_talent_used:
-
-        # 不鼓励过早使用闪现(因为闪现冷却时间太长，步数少的情况基本只能用一次)
-        if frame_no < 300:
-            reward_flicker -= 80
-        elif frame_no < 600:
-            reward_flicker -= 40
-        elif frame_no < 900:
-            reward_flicker -= 20
 
         if is_bump:
             # 撞墙闪现的惩罚
             reward_flicker -= 200
         else:
-            if crossed_wall_correctly:
-                # 正确方向的闪现穿墙获得高奖励
-                reward_flicker += 200
             # 正常闪现的奖励
             if is_treasures_remain:
                 # 如果还有宝箱，奖励靠近未获取宝箱的闪现
                 min_remaining_treasure_dist = min(remaining_treasure_dists)
-                prev_min_remaining_treasure_dist = min(prev_remaining_treasure_dists) if prev_remaining_treasure_dists else 1.0
+                prev_min_remaining_treasure_dist = min(prev_remaining_treasure_dists) if prev_remaining_treasure_dists else 1.0 # 不加防止空数组的逻辑判定会报错，可能和视野有关
                 if min_remaining_treasure_dist < prev_min_remaining_treasure_dist:
                     reward_flicker += 30 * (prev_min_remaining_treasure_dist - min_remaining_treasure_dist)
             else:

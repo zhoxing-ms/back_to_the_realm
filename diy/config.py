@@ -53,6 +53,10 @@ class Config:
     # 初始的学习率
     START_LR = 2e-4
 
+    # N-step returns configuration
+    # N步回报配置
+    N_STEPS = 3  # Number of steps to consider for n-step returns
+
     # Configuration about kaiwu usage. The following configurations can be ignored
     # 关于开悟平台使用的配置，是可以忽略的配置，不需要改动
     SUB_ACTION_MASK_SHAPE = 0

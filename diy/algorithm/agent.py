@@ -46,6 +46,7 @@ class Agent(BaseAgent):
         self._gamma = Config.GAMMA
         self.lr = Config.START_LR
         self.use_per = True  # Toggle for Prioritized Experience Replay
+        self.n_steps = Config.N_STEPS  # Number of steps for n-step returns
 
         self.device = device
         self.pred_model = Model(
@@ -66,13 +67,15 @@ class Agent(BaseAgent):
         self.predict_count = 0
         self.last_report_monitor_time = 0
         
-        # Initialize PER buffer
+        # Initialize PER buffer with n-step parameter
         self.per_buffer = PrioritizedReplayBuffer(
             capacity=10000,
             alpha=0.6,
             beta=0.4,
             beta_increment=0.001,
-            epsilon=0.01
+            epsilon=0.01,
+            n_steps=self.n_steps,
+            gamma=self._gamma
         )
 
         self.agent_type = agent_type
@@ -190,6 +193,7 @@ class Agent(BaseAgent):
             .to(self.device)
         )
 
+        # Get rewards - these will already be n-step returns when using PER with n-steps
         rew = torch.tensor(np.array([frame.rew for frame in t_data]), device=self.device)
         _batch_feature_vec = [frame._obs[: self.obs_split[0]] for frame in t_data]
         _batch_feature_map = [frame._obs[self.obs_split[0] :] for frame in t_data]
@@ -211,7 +215,15 @@ class Agent(BaseAgent):
             q = q.masked_fill(~_batch_obs_legal, float(torch.min(q)))
             q_max = q.max(dim=1).values.detach()
 
-        target_q = rew + self._gamma * q_max * not_done
+        # When using n-step returns, the rewards (rew) already include the discounted sum of n rewards
+        # So we only need to add the discounted max Q-value of the nth next state
+        # The discount factor for the nth state is gamma^n
+        if self.use_per and self.n_steps > 1:
+            # For n-step returns, the discount factor is gamma^n
+            target_q = rew + (self._gamma ** self.n_steps) * q_max * not_done
+        else:
+            # For 1-step returns (standard DQN)
+            target_q = rew + self._gamma * q_max * not_done
 
         self.optim.zero_grad()
 
@@ -250,7 +262,7 @@ class Agent(BaseAgent):
                 "q_value": q_value,
                 "reward": reward,
                 "diy_1": pred_model_grad_norm,
-                "diy_2": 0,
+                "diy_2": self.n_steps,  # Report n-steps as a monitoring metric
                 "diy_3": 0,
                 "diy_4": 0,
                 "diy_5": 0,
