@@ -97,8 +97,9 @@ class PrioritizedReplayBuffer:
     """
     A replay buffer that samples experiences based on their TD error priority.
     Uses a SumTree for efficient priority-based sampling.
+    Supports n-step returns for better long-term reward consideration.
     """
-    def __init__(self, capacity, alpha=0.6, beta=0.4, beta_increment=0.001, epsilon=0.01):
+    def __init__(self, capacity, alpha=0.6, beta=0.4, beta_increment=0.001, epsilon=0.01, n_steps=1, gamma=0.9):
         """
         Initialize the buffer with hyperparameters
         
@@ -108,6 +109,8 @@ class PrioritizedReplayBuffer:
             beta: Controls importance sampling weights (0 = no correction, 1 = full correction)
             beta_increment: How much to increase beta over time
             epsilon: Small constant to add to priorities to ensure non-zero probability
+            n_steps: Number of steps for n-step returns calculation
+            gamma: Discount factor for future rewards
         """
         self.tree = SumTree(capacity)
         self.capacity = capacity
@@ -116,16 +119,95 @@ class PrioritizedReplayBuffer:
         self.beta_increment = beta_increment  # Beta annealing
         self.epsilon = epsilon  # Small constant to avoid zero priority
         self.max_priority = 1.0  # Initial max priority
-
+        
+        # N-step returns parameters
+        self.n_steps = n_steps
+        self.gamma = gamma
+        
+        # Buffer to store transitions temporarily for n-step returns calculation
+        self.n_step_buffer = deque(maxlen=n_steps)
+        
+    def _get_n_step_info(self, n_step_buffer):
+        """
+        Calculate the n-step returns information
+        
+        Returns:
+            (first_obs, first_act, reward, last_obs, done)
+            where reward is the n-step discounted reward
+        """
+        # Get the first observation and action
+        first_obs = n_step_buffer[0][0]  # obs
+        first_act = n_step_buffer[0][1]  # act
+        
+        # Get the latest observation and done flag
+        last_obs = n_step_buffer[-1][2]  # next_obs (_obs)
+        done = n_step_buffer[-1][3]      # done flag
+        
+        # Calculate n-step discounted reward
+        n_step_reward = 0
+        for i, (_, _, _, rew, _) in enumerate(n_step_buffer):
+            # 检查前面的步骤是否有done=True的情况，如果有则停止累积
+            if i > 0 and n_step_buffer[i-1][3]:  # 检查前一个transition是否done
+                break
+            n_step_reward += (self.gamma ** i) * rew
+            
+        return first_obs, first_act, n_step_reward, last_obs, done
+    
     def add(self, sample, error=None):
         """
-        Add a new experience to the buffer with priority based on TD error
-        """
-        # Use max priority for new samples to encourage exploration
-        priority = self.max_priority if error is None else (abs(error) + self.epsilon) ** self.alpha
+        Add a new experience to the n-step buffer. When the buffer reaches n_steps, 
+        calculate the n-step return and add it to the replay buffer.
         
-        # Add sample to buffer with priority
-        self.tree.add(priority, sample)
+        Args:
+            sample: (obs, act, _obs, rew, done, _obs_legal)
+            error: TD error (optional)
+        """
+        # Extract data from sample
+        obs = sample.obs
+        act = sample.act
+        _obs = sample._obs
+        rew = sample.rew
+        done = sample.done
+        _obs_legal = sample._obs_legal
+        
+        # Store in n-step buffer
+        self.n_step_buffer.append((obs, act, _obs, rew, _obs_legal))
+        
+        # 如果有终止状态出现，确保所有的n-step buffer都被处理
+        # 我们最多处理n_steps个transition或直到遇到done
+        while len(self.n_step_buffer) >= 1:
+            # 如果buffer长度小于n_steps且当前episode未结束，等待更多transition
+            if len(self.n_step_buffer) < self.n_steps and not done:
+                break
+                
+            # 计算n-step returns
+            first_obs, first_act, n_step_reward, last_obs, is_done = self._get_n_step_info(self.n_step_buffer)
+            
+            # 创建一个修改后的sample，包含n-step信息
+            from types import SimpleNamespace
+            n_step_sample = SimpleNamespace()
+            n_step_sample.obs = first_obs
+            n_step_sample.act = first_act
+            n_step_sample._obs = last_obs
+            n_step_sample.rew = n_step_reward
+            n_step_sample.done = is_done
+            n_step_sample._obs_legal = self.n_step_buffer[-1][4]  # 使用最新状态的合法动作
+            
+            # 使用最大优先级来鼓励探索
+            priority = self.max_priority if error is None else (abs(error) + self.epsilon) ** self.alpha
+            
+            # 将sample添加到buffer中并携带优先级
+            self.tree.add(priority, n_step_sample)
+            
+            # 处理过的第一个transition从buffer中移除
+            self.n_step_buffer.popleft()
+            
+            # 如果当前状态是终止状态，我们会在下一次迭代时继续处理剩余的transitions
+            # 这样可以确保经验不会丢失
+            if is_done and len(self.n_step_buffer) > 0:
+                done = True  # 确保循环继续
+            else:
+                break  # 处理完一个n步序列后退出
 
     def sample(self, batch_size):
         """

@@ -46,17 +46,25 @@ class Agent(BaseAgent):
         self._gamma = Config.GAMMA
         self.lr = Config.START_LR
         self.use_per = True  # Toggle for Prioritized Experience Replay
+        self.use_n_step = Config.USE_N_STEP  # 是否使用n步回报
+        self.n_steps = Config.N_STEPS if Config.USE_N_STEP else 1  # 如果不使用n-step则默认为1
+        self.use_noisy = Config.USE_NOISY  # 是否使用NoisyNet
+        self.noisy_std_init = Config.NOISY_STD_INIT  # NoisyNet初始噪声标准差
 
         self.device = device
         self.pred_model = Model(
             state_shape=self.obs_shape,
             action_shape=self.act_shape,
             softmax=False,
+            use_noisy=self.use_noisy,
+            std_init=self.noisy_std_init
         )
         self.target_model = Model(
             state_shape=self.obs_shape,
             action_shape=self.act_shape,
             softmax=False,
+            use_noisy=self.use_noisy,
+            std_init=self.noisy_std_init
         )
         self.pred_model.to(self.device)
         self.target_model.to(self.device)
@@ -66,13 +74,15 @@ class Agent(BaseAgent):
         self.predict_count = 0
         self.last_report_monitor_time = 0
         
-        # Initialize PER buffer
+        # Initialize PER buffer with n-step parameter
         self.per_buffer = PrioritizedReplayBuffer(
             capacity=10000,
             alpha=0.6,
             beta=0.4,
             beta_increment=0.001,
-            epsilon=0.01
+            epsilon=0.01,
+            n_steps=self.n_steps,
+            gamma=self._gamma
         )
 
         self.agent_type = agent_type
@@ -111,15 +121,24 @@ class Agent(BaseAgent):
             .to(self.device)
         )
         pred_model = self.pred_model
+        # 明确设置为评估模式
         pred_model.eval()
-        # Exploration factor,
-        # we want epsilon to decrease as the number of prediction steps increases, until it reaches 0.1
-        # 探索因子, 我们希望epsilon随着预测步数越来越小，直到0.1为止
-        self.epsilon = max(0.1, self.epsilon - self.predict_count / self.egp)
+        
+        # 对于NoisyNet模型，每次预测时重置噪声
+        if self.use_noisy:
+            pred_model.reset_noise()
+        
+        # NoisyNet不需要epsilon-greedy，因为噪声已经提供了足够的探索
+        # 所以当使用NoisyNet时，直接使用模型输出
+        use_random = False
+        if not self.use_noisy:
+            # 常规epsilon-greedy探索策略
+            self.epsilon = max(0.1, self.epsilon - self.predict_count / self.egp)
+            # 在评估时不需要随机探索
+            use_random = not exploit_flag and np.random.rand(1) < self.epsilon
 
         with torch.no_grad():
-            # epsilon greedy
-            if not exploit_flag and np.random.rand(1) < self.epsilon:
+            if use_random:
                 random_action = np.random.rand(batch, self.act_shape)
                 random_action = torch.tensor(random_action, dtype=torch.float32).to(self.device)
                 random_action = random_action.masked_fill(~legal_act, 0)
@@ -130,8 +149,17 @@ class Agent(BaseAgent):
                     self.__convert_to_tensor(feature_map).view(batch, *self.obs_split[1]),
                 ]
                 logits, _ = pred_model(feature, state=None)
-                logits = logits.masked_fill(~legal_act, float(torch.min(logits)))
-                act = logits.argmax(dim=1).cpu().view(-1, 1).tolist()
+                
+                # 确保所有掩码外的动作概率为负无穷，防止选择非法动作
+                min_val = float('-inf')
+                logits = logits.masked_fill(~legal_act, min_val)
+                
+                # 如果所有动作都是非法的(极端情况)，随机选择一个动作
+                if (logits == min_val).all():
+                    self.logger.warning("All actions are illegal, selecting random action")
+                    act = np.random.randint(0, self.act_shape, size=(batch, 1)).tolist()
+                else:
+                    act = logits.argmax(dim=1).cpu().view(-1, 1).tolist()
 
         format_action = [[instance[0] % self.direction_space, instance[0] // self.direction_space] for instance in act]
         self.predict_count += 1
@@ -147,6 +175,10 @@ class Agent(BaseAgent):
 
     @learn_wrapper
     def learn(self, list_sample_data):
+        # 如果没有数据，直接返回
+        if not list_sample_data or len(list_sample_data) == 0:
+            return
+            
         # Standard experience replay if PER is disabled
         if not self.use_per:
             t_data = list_sample_data
@@ -171,6 +203,10 @@ class Agent(BaseAgent):
             weights = torch.FloatTensor(weights).to(self.device)
             
             batch = len(t_data)
+            
+            # 如果采样失败，直接返回
+            if batch == 0:
+                return
 
         # [b, d]
         batch_feature_vec = [frame.obs[: self.obs_split[0]] for frame in t_data]
@@ -190,6 +226,7 @@ class Agent(BaseAgent):
             .to(self.device)
         )
 
+        # Get rewards - these will already be n-step returns when using PER with n-steps
         rew = torch.tensor(np.array([frame.rew for frame in t_data]), device=self.device)
         _batch_feature_vec = [frame._obs[: self.obs_split[0]] for frame in t_data]
         _batch_feature_map = [frame._obs[self.obs_split[0] :] for frame in t_data]
@@ -204,19 +241,39 @@ class Agent(BaseAgent):
             self.__convert_to_tensor(_batch_feature_map).view(batch, *self.obs_split[1]),
         ]
 
+        # 设置模型为训练模式
+        self.pred_model.train()
         target_model = getattr(self, "target_model")
         target_model.eval()
+        
+        # 对于NoisyNet，在训练期间也需要重置噪声
+        if self.use_noisy:
+            self.pred_model.reset_noise()
+            target_model.reset_noise()
+
         with torch.no_grad():
             q, h = target_model(_batch_feature, state=None)
-            q = q.masked_fill(~_batch_obs_legal, float(torch.min(q)))
+            q = q.masked_fill(~_batch_obs_legal, float('-inf'))  # 使用负无穷替代最小值
             q_max = q.max(dim=1).values.detach()
+            
+            # 处理所有动作都被掩码的情况
+            invalid_mask = torch.isinf(q_max)
+            if invalid_mask.any():
+                q_max[invalid_mask] = 0.0
 
-        target_q = rew + self._gamma * q_max * not_done
+        # When using n-step returns, the rewards (rew) already include the discounted sum of n rewards
+        # So we only need to add the discounted max Q-value of the nth next state
+        # The discount factor for the nth state is gamma^n
+        if self.use_per and self.use_n_step and self.n_steps > 1:
+            # For n-step returns, the discount factor is gamma^n
+            target_q = rew + (self._gamma ** self.n_steps) * q_max * not_done
+        else:
+            # For 1-step returns (standard DQN)
+            target_q = rew + self._gamma * q_max * not_done
 
         self.optim.zero_grad()
 
         pred_model = getattr(self, "pred_model")
-        pred_model.train()
         logits, h = pred_model(batch_feature, state=None)
         
         # Update priorities in buffer if using PER
@@ -227,6 +284,11 @@ class Agent(BaseAgent):
         
         # Apply importance sampling weights to loss if using PER, otherwise use standard loss
         elementwise_loss = torch.square(target_q - logits.gather(1, batch_action).view(-1))
+        
+        # 添加梯度裁剪，防止梯度爆炸
+        max_loss = 100.0
+        elementwise_loss = torch.clamp(elementwise_loss, 0, max_loss)
+        
         loss = (elementwise_loss * weights).mean()
         loss.backward()
 
@@ -250,9 +312,9 @@ class Agent(BaseAgent):
                 "q_value": q_value,
                 "reward": reward,
                 "diy_1": pred_model_grad_norm,
-                "diy_2": 0,
-                "diy_3": 0,
-                "diy_4": 0,
+                "diy_2": self.n_steps if self.use_n_step else 0,  # Report n-steps only if enabled
+                "diy_3": 1 if self.use_noisy else 0,  # Report NoisyNet status
+                "diy_4": self.epsilon if not self.use_noisy else 0,  # Report epsilon only if not using NoisyNet
                 "diy_5": 0,
             }
             if self.monitor:

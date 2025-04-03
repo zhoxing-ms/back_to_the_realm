@@ -40,18 +40,28 @@ class Config:
 
     # Exploration factor, see the calculation of epsilon in the function in the above comment
     # 探索因子, epsilon的计算见上面注释中的函数
-    EPSILON_GREEDY_PROBABILITY = 30000
+    EPSILON_GREEDY_PROBABILITY = 40000
 
     # Discount factor GAMMA in RL
     # RL中的回报折扣GAMMA
-    GAMMA = 0.9
+    GAMMA = 0.95
 
     # epsilon
-    EPSILON = 0.1
+    EPSILON = 0.2
 
     # Initial learning rate
     # 初始的学习率
-    START_LR = 1e-4
+    START_LR = 2e-4
+
+    # N-step returns configuration
+    # N步回报配置
+    USE_N_STEP = False  # 是否使用n步回报
+    N_STEPS = 3  # Number of steps to consider for n-step returns
+
+    # NoisyNet configuration
+    # NoisyNet配置
+    USE_NOISY = False  # 是否使用NoisyNet
+    NOISY_STD_INIT = 0.1  # NoisyNet初始噪声标准差，降低初始噪声幅度
 
     # Configuration about kaiwu usage. The following configurations can be ignored
     # 关于开悟平台使用的配置，是可以忽略的配置，不需要改动

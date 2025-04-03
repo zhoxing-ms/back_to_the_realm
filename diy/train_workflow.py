@@ -10,6 +10,7 @@
 """
 
 import time
+import random
 from kaiwu_agent.utils.common_func import Frame
 from kaiwu_agent.utils.common_func import attached
 
@@ -26,36 +27,128 @@ from conf.usr_conf import usr_conf_check
 @attached
 def workflow(envs, agents, logger=None, monitor=None):
     env, agent = envs[0], agents[0]
-    epoch_num = 100000
-    episode_num_every_epoch = 1
-    g_data_truncat = 256
+
+    # 优化：增加训练轮次以提高全局规划能力
+    # Optimization: Increase training epochs to improve global planning capability
+    epoch_num = 200000  # 从100000增加到200000，给予更充分的学习时间
+
+    # 优化：更高效的采样和更大批量的学习
+    # Optimization: More efficient sampling and larger batch learning
+    episode_num_every_epoch = 3  # 增加到3，提高样本多样性
+    
+    # 增加截断长度以捕获更长的时序依赖
+    g_data_truncat = 512  # 从256增加到512
+    
     last_save_model_time = 0
+    
+    # 优化：引入课程学习策略，从简单到困难
+    # Optimization: Introduce curriculum learning strategy, from simple to hard
+    curriculum_phase = 0  # 课程学习阶段
+    curriculum_thresholds = [1000, 3000, 7000, 15000]  # 课程学习阶段转换点
 
-    # User-defined game start configuration
-    # 用户自定义的游戏启动配置
-    usr_conf = {
-        "diy": {
-            "start": 2,
-            "end": 1,
-            # "treasure_id": [4, 5, 6, 7, 8, 9],
-            "treasure_random": 1,
-            "talent_type": 1,
-            "treasure_num": 8,
-            "max_step": 2000,
-        }
-    }
-
-    # usr_conf_check is a tool to check whether the game configuration is correct
-    # It is recommended to perform a check before calling reset.env
-    # usr_conf_check会检查游戏配置是否正确，建议调用reset.env前先检查一下
-    valid = usr_conf_check(usr_conf, logger)
-    if not valid:
-        logger.error(f"usr_conf_check return False, please check")
-        return
-
+    # 优化：设计更丰富的环境配置用于训练，增强泛化能力和全局规划
+    # Optimization: Design more diverse environment configurations for training to enhance generalization and global planning
+    usr_conf_templates = [
+        # 阶段1：基础训练，少量宝箱，专注于直接路径规划
+        # Phase 1: Basic training, few treasures, focus on direct path planning
+        {
+            "diy": {
+                "start": 2,
+                "end": 1,
+                "treasure_random": 1,
+                "talent_type": 1,
+                "treasure_num": 3,  # 少量宝箱
+                "max_step": 1000,   # 较短步数限制
+            }
+        },
+        # 阶段2：中级训练，中等宝箱数量，平衡直接性和收集性
+        # Phase 2: Intermediate training, medium number of treasures, balance directness and collection
+        {
+            "diy": {
+                "start": 2,
+                "end": 1,
+                "treasure_random": 1,
+                "talent_type": 1,
+                "treasure_num": 7,  # 中等宝箱数量
+                "max_step": 1500,   # 中等步数限制
+            }
+        },
+        # 阶段3：高级训练，大量宝箱，注重全局收集策略
+        # Phase 3: Advanced training, large number of treasures, focus on global collection strategy
+        {
+            "diy": {
+                "start": 2,
+                "end": 1,
+                "treasure_random": 1,
+                "talent_type": 1,
+                "treasure_num": 12,  # 大量宝箱
+                "max_step": 2000,    # 较长步数限制
+            }
+        },
+        # 极限全收集测试：全部宝箱
+        # Extreme full collection test: All treasures
+        {
+            "diy": {
+                "start": 2,
+                "end": 1,
+                "treasure_random": 1,
+                "talent_type": 1,
+                "treasure_num": 13,  # 全部宝箱
+                "max_step": 2000,    # 较长步数限制
+            }
+        },
+        # 无宝箱配置：纯路径寻找训练
+        # No-treasure configuration: Pure path finding training
+        {
+            "diy": {
+                "start": 2,
+                "end": 1,
+                "treasure_random": 1,
+                "talent_type": 1,
+                "treasure_num": 0,  # 无宝箱
+                "max_step": 800,    # 更短步数限制
+            }
+        },
+    ]
+    
+    # 跟踪训练指标
+    best_avg_reward = -float('inf')
+    training_start_time = time.time()
+    
     for epoch in range(epoch_num):
         epoch_total_rew = 0
         data_length = 0
+
+        # 优化：根据课程学习阶段选择适当的环境配置
+        # Optimization: Select appropriate environment configuration based on curriculum learning phase
+        if epoch < curriculum_thresholds[0]:
+            # 阶段1：简单配置，专注于基础移动和少量宝箱
+            usr_conf_indices = [0, 4]  # 基础训练和无宝箱配置
+        elif epoch < curriculum_thresholds[1]:
+            # 阶段2：添加更多宝箱，开始学习集合规划
+            usr_conf_indices = [0, 1, 4]  # 基础训练、中级训练和无宝箱配置
+        elif epoch < curriculum_thresholds[2]:
+            # 阶段3：增加复杂性，引入更多宝箱配置
+            usr_conf_indices = [1, 2, 4]  # 中级训练、高级训练和无宝箱配置
+        else:
+            # 阶段4：全面训练，包括极限全收集
+            usr_conf_indices = [2, 3]  # 高级训练、极限全收集
+
+        # 在当前课程阶段的配置中随机选择一个
+        # Randomly select a configuration from the current curriculum phase
+        usr_conf_idx = random.choice(usr_conf_indices)
+        usr_conf = usr_conf_templates[usr_conf_idx]
+
+        # 随机选择一个环境配置
+        usr_conf = usr_conf_templates[epoch % len(usr_conf_templates)]
+        
+        # 检查配置有效性
+        valid = usr_conf_check(usr_conf, logger)
+        if not valid:
+            logger.error(f"usr_conf_check return False, please check")
+            continue
+        
+        # 运行episode并收集数据
         for g_data in run_episodes(episode_num_every_epoch, env, agent, g_data_truncat, usr_conf, logger):
             data_length += len(g_data)
             total_rew = sum([i.rew for i in g_data])
@@ -65,16 +158,35 @@ def workflow(envs, agents, logger=None, monitor=None):
 
         avg_step_reward = 0
         if data_length:
-            avg_step_reward = f"{(epoch_total_rew/data_length):.2f}"
+            avg_step_reward = epoch_total_rew/data_length
+            avg_step_reward_str = f"{avg_step_reward:.2f}"
 
         # save model file
         # 保存model文件
         now = time.time()
         if now - last_save_model_time >= 120:
-            agent.save_model()
-            last_save_model_time = now
+            # 记录最佳性能并保存模型
+            if avg_step_reward > best_avg_reward:
+                best_avg_reward = avg_step_reward
+                logger.info(f"New best model saved with avg reward: {avg_step_reward_str}")
+                agent.save_model(id="best_model")
+            else:
+                agent.save_model()
 
-        logger.info(f"Avg Step Reward: {avg_step_reward}, Epoch: {epoch}, Data Length: {data_length}")
+            last_save_model_time = now
+        
+        # 计算训练时间并记录
+        training_time = (time.time() - training_start_time) / 60  # 分钟
+        
+        logger.info(f"Avg Step Reward: {avg_step_reward_str}, Epoch: {epoch}, Data Length: {data_length}, Training Time: {training_time:.1f} min")
+        
+        # 添加学习率衰减策略
+        if epoch > 0 and epoch % 5000 == 0:
+            # 每5000轮次衰减一次学习率
+            agent.lr *= 0.95
+            for param_group in agent.optim.param_groups:
+                param_group['lr'] = agent.lr
+            logger.info(f"Learning rate decreased to {agent.lr}")
 
 
 def run_episodes(n_episode, env, agent, g_data_truncat, usr_conf, logger):
@@ -103,6 +215,9 @@ def run_episodes(n_episode, env, agent, g_data_truncat, usr_conf, logger):
         done = False
         step = 0
         bump_cnt = 0
+        
+        # Store transitions for the episode
+        episode_transitions = []
 
         while not done:
             # Agent performs inference, gets the predicted action for the next frame
@@ -203,3 +318,14 @@ def run_episodes(n_episode, env, agent, g_data_truncat, usr_conf, logger):
             obs_data = _obs_data
             obs = _obs
             env_info = _env_info
+
+        # At the end of the episode, process any remaining n-step transitions
+        if hasattr(agent, 'per_buffer') and hasattr(agent.per_buffer, 'n_step_buffer'):
+            # Force process any remaining transitions in the n-step buffer
+            # This ensures we don't lose experiences at the end of episodes
+            if len(agent.per_buffer.n_step_buffer) > 0:
+                # Learn from the collected data
+                # Note: The agent's learn method should handle the learning from the n-step buffer
+                if len(collector) > 0:
+                    sample_data = sample_process(collector)
+                    agent.learn(sample_data)
