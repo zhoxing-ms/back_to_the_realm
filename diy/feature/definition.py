@@ -235,9 +235,67 @@ def reward_shaping(frame_no, score, terminated, truncated, obs, _obs, env_info, 
 
     # Reward 5.2 Penalty for repeated exploration
     # 奖励5.2 重复探索的惩罚
-    reward_memory = 0
+    def calculate_area_visit_penalty(memory_map, area_size=7):
+        """
+        通过检查7*7区域的四个边界来判断轨迹数量，累加边界点的访问次数后除2为轨迹数
+        Args:
+            memory_map: 探索记录地图（一维数组，实际表示51x51的地图）
+            area_size: 检查区域的大小，默认7表示7x7的区域
+        Returns:
+            penalty: 区域重复探索的惩罚值
+        """
+        map_size = 51
+        center = len(memory_map) // 2
+        half_size = area_size // 2
+        
+        # 将7*7区域转换为二维数组
+        area_map = np.zeros((area_size, area_size))
+        
+        # 提取7*7区域的访问记录
+        for row in range(-half_size, half_size + 1):
+            for col in range(-half_size, half_size + 1):
+                idx = center + col + row * map_size
+                if 0 <= idx < len(memory_map):
+                    area_map[row + half_size][col + half_size] = memory_map[idx]
+        
+        # 检查四个边界的访问次数总和
+        boundary_visits = 0  # 记录边界上的总访问次数
+        
+        # 遍历边界
+        for i in range(area_size):
+            # 检查左边界列
+            boundary_visits += area_map[i][0]
+            # 检查右边界列
+            boundary_visits += area_map[i][area_size-1]
+            
+            # 检查上下边界行（排除已经计算过的角点）
+            if i != 0 and i != area_size-1:  # 排除与左右边界重复计算的点
+                # 检查上边界
+                boundary_visits += area_map[0][i]
+                # 检查下边界
+                boundary_visits += area_map[area_size-1][i]
+        
+        # 计算轨迹数量和惩罚
+        penalty = 0
+        
+        # 计算实际轨迹数（边界访问总次数除以2）
+        num_paths = boundary_visits / 2
+        
+        # 如果轨迹数超过2条，进行惩罚
+        if num_paths > 2:
+            penalty += (num_paths - 2) * 30  # 每多一条轨迹增加30的惩罚
+        
+        # 设置惩罚上限
+        final_penalty = min(penalty, 500)
+        
+        return final_penalty
+
     memory_map = obs.feature.memory_map
-    reward_memory = memory_map[len(memory_map) // 2]
+    reward_memory = calculate_area_visit_penalty(memory_map, area_size=7)
+    
+    if not is_treasures_remain:
+        # 剩余宝箱时惩罚
+        reward_memory = calculate_area_visit_penalty(memory_map, area_size=7)
 
     # Reward 5.3 Penalty for bumping into the wall
     # 奖励5.3 撞墙的惩罚
