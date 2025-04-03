@@ -58,7 +58,7 @@ class NoisyLinear(nn.Module):
         Generate factorized Gaussian noise
         """
         x = torch.randn(size, device=self.weight_mu.device)
-        return x.sign().mul(x.abs().sqrt())
+        return x.sign().mul(x.abs().sqrt()).clamp(-2.0, 2.0)
     
     def reset_noise(self):
         """
@@ -67,7 +67,12 @@ class NoisyLinear(nn.Module):
         epsilon_in = self._scale_noise(self.in_features)
         epsilon_out = self._scale_noise(self.out_features)
         
-        self.weight_epsilon.copy_(epsilon_out.outer(epsilon_in))
+        if hasattr(torch, 'outer'):
+            self.weight_epsilon.copy_(epsilon_out.outer(epsilon_in))
+        else:
+            self.weight_epsilon.copy_(epsilon_out.unsqueeze(1).repeat(1, self.in_features) * 
+                                      epsilon_in.unsqueeze(0).repeat(self.out_features, 1))
+        
         self.bias_epsilon.copy_(epsilon_out)
     
     def forward(self, x):
@@ -78,7 +83,6 @@ class NoisyLinear(nn.Module):
             weight = self.weight_mu + self.weight_sigma * self.weight_epsilon
             bias = self.bias_mu + self.bias_sigma * self.bias_epsilon
         else:
-            # During evaluation, use only the mean weights
             weight = self.weight_mu
             bias = self.bias_mu
             

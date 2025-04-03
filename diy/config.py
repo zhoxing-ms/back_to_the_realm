@@ -55,13 +55,13 @@ class Config:
 
     # N-step returns configuration
     # N步回报配置
-    USE_N_STEP = True  # 是否使用n步回报
+    USE_N_STEP = False  # 是否使用n步回报
     N_STEPS = 3  # Number of steps to consider for n-step returns
 
     # NoisyNet configuration
     # NoisyNet配置
-    USE_NOISY = True  # 是否使用NoisyNet
-    NOISY_STD_INIT = 0.5  # NoisyNet初始噪声标准差
+    USE_NOISY = False  # 是否使用NoisyNet
+    NOISY_STD_INIT = 0.1  # NoisyNet初始噪声标准差，降低初始噪声幅度
 
     # Configuration about kaiwu usage. The following configurations can be ignored
     # 关于开悟平台使用的配置，是可以忽略的配置，不需要改动
